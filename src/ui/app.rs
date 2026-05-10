@@ -9,8 +9,9 @@ use crate::core::pinger;
 use crate::core::state::{PingConfig, SharedState};
 use crate::ui::config_tab::{self, ConfigState};
 use crate::ui::console::{self, ConsoleState};
+use crate::ui::monitor::{self, MonitorState};
 use crate::ui::sidebar::{self, SidebarState};
-use crate::ui::{help, monitor};
+use crate::ui::help;
 
 #[derive(PartialEq)]
 enum Tab {
@@ -27,6 +28,7 @@ pub struct NetworkMonitorApp {
     sidebar: SidebarState,
     console: ConsoleState,
     config_tab: ConfigState,
+    monitor: MonitorState,
 }
 
 impl NetworkMonitorApp {
@@ -51,6 +53,7 @@ impl NetworkMonitorApp {
             sidebar: SidebarState::new(saved.presets.clone(), saved.selected_preset),
             console: ConsoleState::new(),
             config_tab: ConfigState::from_saved(&saved),
+            monitor: MonitorState::new(),
         }
     }
 }
@@ -73,7 +76,7 @@ impl eframe::App for NetworkMonitorApp {
             match self.active_tab {
                 Tab::Monitor => {
                     let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
-                    monitor::render(ui, &shared);
+                    monitor::render(ui, &shared, &mut self.monitor);
                 }
                 Tab::Console => console::render(ui, &self.state, &mut self.console),
                 Tab::Config => config_tab::render(ui, &self.state, &mut self.config_tab, &mut self.sidebar),

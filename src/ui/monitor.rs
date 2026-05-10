@@ -1,7 +1,7 @@
 //! # Monitor Tab — Data visualization
 //!
-//! Renders the Monitor tab: external stats, gateway health, latency chart,
-//! and interval reports table.
+//! Renders the Monitor tab: external stats, gateway health, latency chart
+//! with selectable time window, and interval reports table.
 
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
@@ -9,8 +9,28 @@ use egui_plot::{Line, Plot, PlotPoints};
 use crate::core::state::PingState;
 use crate::ui::helpers::{stat_card, loss_color, latency_color, jitter_color};
 
+/// Time window options for the chart (in seconds, 0 = show all)
+const TIME_WINDOWS: &[(f64, &str)] = &[
+    (60.0, "1m"),
+    (300.0, "5m"),
+    (900.0, "15m"),
+    (1800.0, "30m"),
+    (0.0, "All"),
+];
+
+/// Persistent state for the monitor tab
+pub struct MonitorState {
+    pub selected_window: usize,
+}
+
+impl MonitorState {
+    pub fn new() -> Self {
+        Self { selected_window: 1 } // default to 5m
+    }
+}
+
 /// Render the full Monitor tab contents
-pub fn render(ui: &mut egui::Ui, state: &PingState) {
+pub fn render(ui: &mut egui::Ui, state: &PingState, monitor: &mut MonitorState) {
     render_external_stats(ui, state);
 
     if state.gateway_enabled && state.gateway_ip.is_some() {
@@ -18,7 +38,7 @@ pub fn render(ui: &mut egui::Ui, state: &PingState) {
     }
 
     ui.add_space(8.0);
-    render_latency_chart(ui, state);
+    render_latency_chart(ui, state, monitor);
     ui.add_space(8.0);
     render_interval_reports(ui, state);
 }
@@ -67,24 +87,36 @@ fn render_gateway_stats(ui: &mut egui::Ui, state: &PingState) {
     });
 }
 
-/// Latency-over-time chart with timeout markers and optional gateway overlay.
-/// X-axis is elapsed seconds; hover shows time, latency, and timeout status.
-fn render_latency_chart(ui: &mut egui::Ui, state: &PingState) {
-    ui.heading("Latency Over Time");
+/// Latency-over-time chart with time window selector, timeout markers, and gateway overlay.
+fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut MonitorState) {
+    ui.horizontal(|ui| {
+        ui.heading("Latency Over Time");
+        ui.add_space(16.0);
+        for (idx, (_secs, label)) in TIME_WINDOWS.iter().enumerate() {
+            if ui.selectable_label(monitor.selected_window == idx, *label).clicked() {
+                monitor.selected_window = idx;
+            }
+        }
+    });
 
-    // Build latency line — only successful pings, using elapsed time as X
+    let elapsed = state.elapsed_secs();
+    let window_secs = TIME_WINDOWS[monitor.selected_window].0;
+    let min_time = if window_secs > 0.0 { (elapsed - window_secs).max(0.0) } else { 0.0 };
+
+    // Build latency line — filter to visible window
     let latency_points: Vec<[f64; 2]> = state.results
         .iter()
+        .filter(|result| result.elapsed_secs >= min_time)
         .filter_map(|result| result.latency_ms.map(|ms| [result.elapsed_secs, ms]))
         .collect();
     let ext_line = Line::new(PlotPoints::new(latency_points))
         .color(egui::Color32::from_rgb(100, 200, 255))
         .name("Latency (ms)");
 
-    // Build timeout markers — red dots at y=0 at the exact time they occurred
+    // Build timeout markers — filter to visible window
     let timeout_points: Vec<[f64; 2]> = state.results
         .iter()
-        .filter(|result| !result.success)
+        .filter(|result| !result.success && result.elapsed_secs >= min_time)
         .map(|result| [result.elapsed_secs, 0.0])
         .collect();
     let timeout_markers = egui_plot::Points::new(timeout_points)
@@ -98,7 +130,6 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState) {
 
     let show_gateway = state.gateway_enabled && state.gateway_ip.is_some();
 
-    // Format X-axis labels as minutes:seconds
     let x_fmt = |mark: egui_plot::GridMark, _range: &std::ops::RangeInclusive<f64>| {
         let total_secs = mark.value as u64;
         let mins = total_secs / 60;
@@ -106,30 +137,68 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState) {
         format!("{}:{:02}", mins, secs)
     };
 
-    Plot::new("latency_plot")
+    // Collect visible results for the snap-to-nearest tooltip
+    let visible_results: Vec<(f64, Option<f64>, bool)> = state.results
+        .iter()
+        .filter(|result| result.elapsed_secs >= min_time)
+        .map(|result| (result.elapsed_secs, result.latency_ms, result.success))
+        .collect();
+
+    let mut plot = Plot::new("latency_plot")
         .height(200.0)
         .allow_drag(false)
         .allow_zoom(false)
+        .allow_scroll(false)
+        .allow_boxed_zoom(false)
         .show_axes(true)
         .x_axis_label("Time (m:ss)")
         .y_axis_label("ms")
         .x_axis_formatter(x_fmt)
-        .label_formatter(|name, value| {
-            let total_secs = value.x as u64;
-            let mins = total_secs / 60;
-            let secs = total_secs % 60;
-            if name == "Timeout" {
-                format!("⏱ {}:{:02}\n❌ Timeout", mins, secs)
-            } else {
-                format!("⏱ {}:{:02}\n📶 {:.1} ms", mins, secs, value.y)
+        .label_formatter(move |_name, value| {
+            // Find the nearest data point by elapsed time
+            let cursor_time = value.x;
+            let nearest = visible_results.iter().min_by(|point_a, point_b| {
+                let dist_a = (point_a.0 - cursor_time).abs();
+                let dist_b = (point_b.0 - cursor_time).abs();
+                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            match nearest {
+                Some((elapsed, latency, success)) => {
+                    let total_secs = *elapsed as u64;
+                    let mins = total_secs / 60;
+                    let secs = total_secs % 60;
+                    if *success {
+                        format!("⏱ {}:{:02}\n📶 {:.1} ms",
+                            mins, secs,
+                            latency.unwrap_or(0.0))
+                    } else {
+                        format!("⏱ {}:{:02}\n❌ Timeout", mins, secs)
+                    }
+                }
+                None => "No data".to_string(),
             }
         })
-        .legend(egui_plot::Legend::default())
-        .show(ui, |plot_ui| {
-            plot_ui.line(ext_line);
-            plot_ui.points(timeout_markers);
-            if show_gateway { plot_ui.line(gw_line); }
-        });
+        .legend(egui_plot::Legend::default());
+
+    // Lock the X-axis to always show the full window width.
+    // When data is sparse, this keeps the chart spread out left-to-right.
+    if window_secs > 0.0 {
+        let max_time = elapsed.max(window_secs);
+        plot = plot
+            .include_x(max_time - window_secs)
+            .include_x(max_time);
+    } else if elapsed > 0.0 {
+        plot = plot
+            .include_x(0.0)
+            .include_x(elapsed);
+    }
+
+    plot.show(ui, |plot_ui| {
+        plot_ui.line(ext_line);
+        plot_ui.points(timeout_markers);
+        if show_gateway { plot_ui.line(gw_line); }
+    });
 }
 
 /// Scrollable interval reports table (newest first)
@@ -146,7 +215,7 @@ fn render_interval_reports(ui: &mut egui::Ui, state: &PingState) {
                 .striped(true)
                 .min_col_width(60.0)
                 .show(ui, |ui| {
-                    for label in ["Time", "Pings", "OK", "Fail", "Loss%", "Avg ms", "Min ms", "Max ms"] {
+                    for label in ["Time", "Pings", "OK", "Fail", "Loss%", "Events", "Avg ms", "Min ms", "Max ms"] {
                         ui.strong(label);
                     }
                     ui.end_row();
@@ -157,6 +226,7 @@ fn render_interval_reports(ui: &mut egui::Ui, state: &PingState) {
                         ui.label(report.successful.to_string());
                         ui.label(report.failed.to_string());
                         ui.colored_label(loss_color(report.packet_loss_pct), format!("{:.1}", report.packet_loss_pct));
+                        ui.label(report.loss_events.to_string());
                         ui.label(format!("{:.1}", report.avg_latency_ms));
                         ui.label(format!("{:.1}", report.min_latency_ms));
                         ui.label(format!("{:.1}", report.max_latency_ms));

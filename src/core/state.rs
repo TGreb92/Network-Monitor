@@ -88,6 +88,8 @@ pub struct IntervalReport {
     pub avg_latency_ms: f64,
     pub min_latency_ms: f64,
     pub max_latency_ms: f64,
+    /// Number of distinct loss batches within this interval
+    pub loss_events: u64,
 }
 
 /// Central shared state accessed by both the pinger thread (writer) and the GUI (reader).
@@ -369,6 +371,7 @@ impl PingState {
                 if min == f64::MAX { 0.0 } else { min }
             },
             max_latency_ms: self.interval_results.iter().filter_map(|result| result.latency_ms).fold(0.0_f64, f64::max),
+            loss_events: count_loss_events(&self.interval_results),
         };
         self.interval_reports.push_back(report);
         if self.interval_reports.len() > 256 {
@@ -402,6 +405,21 @@ impl PingState {
         self.loss_batches = 0;
         self.in_loss_batch = false;
     }
+}
+
+/// Count distinct loss events (batches of consecutive failures) in a slice of results
+pub fn count_loss_events(results: &[PingResult]) -> u64 {
+    let mut events = 0u64;
+    let mut in_batch = false;
+    for result in results {
+        if result.success {
+            in_batch = false;
+        } else if !in_batch {
+            events += 1;
+            in_batch = true;
+        }
+    }
+    events
 }
 
 /// Thread-safe shared state handle.

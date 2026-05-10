@@ -307,7 +307,7 @@ fn generate_report(
     end_time: chrono::NaiveDateTime,
 ) -> IntervalReport {
     let total = results.len() as u64;
-    let successful = results.iter().filter(|r| r.success).count() as u64;
+    let successful = results.iter().filter(|result| result.success).count() as u64;
     let failed = total - successful;
     let packet_loss_pct = if total > 0 {
         (failed as f64 / total as f64) * 100.0
@@ -315,7 +315,7 @@ fn generate_report(
         0.0
     };
 
-    let latencies: Vec<f64> = results.iter().filter_map(|r| r.latency_ms).collect();
+    let latencies: Vec<f64> = results.iter().filter_map(|result| result.latency_ms).collect();
     let avg = if latencies.is_empty() {
         0.0
     } else {
@@ -334,5 +334,6 @@ fn generate_report(
         avg_latency_ms: avg,
         min_latency_ms: if min == f64::MAX { 0.0 } else { min },
         max_latency_ms: max,
+        loss_events: crate::core::state::count_loss_events(results),
     }
 }
