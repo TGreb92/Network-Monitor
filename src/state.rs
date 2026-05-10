@@ -39,15 +39,19 @@ pub struct PingConfig {
     pub interval_secs: u64,
     /// Milliseconds between consecutive pings (default 1000ms = 1 ping/sec)
     pub ping_interval_ms: u64,
+    /// Test duration in seconds. 0 = unlimited.
+    pub duration_secs: u64,
 }
 
-impl Default for PingConfig {
-    fn default() -> Self {
+impl PingConfig {
+    /// Create a PingConfig from a saved config loaded from disk
+    pub fn from_saved(saved: &crate::config::SavedConfig) -> Self {
         Self {
-            target: "8.8.8.8".to_string(),
-            timeout_ms: 2000,
-            interval_secs: 60,
-            ping_interval_ms: 1000,
+            target: saved.target.clone(),
+            timeout_ms: saved.timeout_ms,
+            interval_secs: saved.interval_secs,
+            ping_interval_ms: saved.ping_interval_ms,
+            duration_secs: saved.duration_mins * 60,
         }
     }
 }
@@ -63,6 +67,8 @@ pub struct PingResult {
     pub latency_ms: Option<f64>,
     /// Local timestamp when this ping was recorded
     pub timestamp: chrono::NaiveDateTime,
+    /// Seconds elapsed since monitoring started (X-axis for chart)
+    pub elapsed_secs: f64,
 }
 
 /// A single line in the console log
@@ -119,6 +125,8 @@ pub struct PingState {
     pub interval_results: Vec<PingResult>,
     /// Flag set by the GUI when config is updated; pinger resets interval tracking
     pub config_changed: bool,
+    /// When monitoring started (for elapsed time calculation)
+    pub start_time: Option<Instant>,
 
     // --- Jitter tracking ---
     /// Previous ping's latency, used to compute jitter (|current - previous|)
@@ -162,6 +170,7 @@ impl PingState {
             interval_start_time: None,
             interval_results: Vec::new(),
             config_changed: false,
+            start_time: None,
             last_latency: None,
             jitter_values: VecDeque::with_capacity(MAX_JITTER),
             gateway_ip: None,
@@ -303,6 +312,63 @@ impl PingState {
         }
         let sum: f64 = self.gw_jitter_values.iter().sum();
         sum / self.gw_jitter_values.len() as f64
+    }
+
+    /// Get elapsed time since monitoring started, formatted as "Xm Ys"
+    pub fn elapsed_display(&self) -> String {
+        match self.start_time {
+            Some(start) => {
+                let total_secs = start.elapsed().as_secs();
+                let mins = total_secs / 60;
+                let secs = total_secs % 60;
+                format!("{}m {}s", mins, secs)
+            }
+            None => "—".to_string(),
+        }
+    }
+
+    /// Get elapsed seconds since monitoring started
+    pub fn elapsed_secs(&self) -> f64 {
+        self.start_time
+            .map(|start| start.elapsed().as_secs_f64())
+            .unwrap_or(0.0)
+    }
+
+    /// Flush the current partial interval as a final report (called on stop)
+    pub fn flush_partial_report(&mut self) {
+        if self.interval_results.is_empty() {
+            return;
+        }
+        let now = chrono::Local::now().naive_local();
+        let start_time = self.interval_start_time.unwrap_or(now);
+        let report = IntervalReport {
+            start_time,
+            end_time: now,
+            total_pings: self.interval_results.len() as u64,
+            successful: self.interval_results.iter().filter(|result| result.success).count() as u64,
+            failed: self.interval_results.iter().filter(|result| !result.success).count() as u64,
+            packet_loss_pct: {
+                let total = self.interval_results.len() as f64;
+                let failed = self.interval_results.iter().filter(|result| !result.success).count() as f64;
+                if total > 0.0 { (failed / total) * 100.0 } else { 0.0 }
+            },
+            avg_latency_ms: {
+                let lats: Vec<f64> = self.interval_results.iter().filter_map(|result| result.latency_ms).collect();
+                if lats.is_empty() { 0.0 } else { lats.iter().sum::<f64>() / lats.len() as f64 }
+            },
+            min_latency_ms: {
+                let min = self.interval_results.iter().filter_map(|result| result.latency_ms).fold(f64::MAX, f64::min);
+                if min == f64::MAX { 0.0 } else { min }
+            },
+            max_latency_ms: self.interval_results.iter().filter_map(|result| result.latency_ms).fold(0.0_f64, f64::max),
+        };
+        self.interval_reports.push_back(report);
+        if self.interval_reports.len() > 256 {
+            self.interval_reports.pop_front();
+        }
+        self.interval_results.clear();
+        self.interval_start = None;
+        self.interval_start_time = None;
     }
 }
 

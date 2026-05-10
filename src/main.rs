@@ -5,7 +5,9 @@
 //! Pinger threads are spawned after the window is created.
 
 mod app;
+mod config;
 mod export;
+mod help;
 mod monitor;
 mod pinger;
 mod state;
@@ -20,8 +22,9 @@ fn main() -> eframe::Result<()> {
         winapi::um::wincon::FreeConsole();
     }
 
-    let config = PingConfig::default();
-    let shared = new_shared_state(config);
+    let saved = config::load();
+    let ping_config = PingConfig::from_saved(&saved);
+    let shared = new_shared_state(ping_config);
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

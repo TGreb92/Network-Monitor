@@ -1,12 +1,15 @@
 //! # Network Monitor — GUI Layer
 //!
-//! Main application struct and sidebar. The Monitor tab rendering is in `monitor.rs`,
-//! export logic in `export.rs`, and shared widgets in `ui_helpers.rs`.
+//! Main application struct with three tabs: Monitor, Console, Config.
+//! Monitor rendering is in `monitor.rs`, export in `export.rs`,
+//! shared widgets in `ui_helpers.rs`, config persistence in `config.rs`.
 
 use eframe::egui;
 use std::time::Instant;
 
+use crate::config::{self, SavedConfig};
 use crate::export;
+use crate::help;
 use crate::monitor;
 use crate::pinger;
 use crate::state::{PingConfig, SharedState, PRESETS};
@@ -16,6 +19,8 @@ use crate::state::{PingConfig, SharedState, PRESETS};
 enum Tab {
     Monitor,
     Console,
+    Config,
+    Help,
 }
 
 /// Main application struct holding shared state and UI-local state
@@ -27,30 +32,44 @@ pub struct NetworkMonitorApp {
     config_timeout: u32,
     config_interval: u64,
     config_ping_freq: u64,
+    config_gateway_enabled: bool,
+    config_auto_detect_gateway: bool,
+    config_duration_mins: u64,
     selected_preset: usize,
+    config_status: Option<(String, Instant)>,
 }
 
 impl NetworkMonitorApp {
     pub fn new(state: SharedState, _cc: &eframe::CreationContext<'_>) -> Self {
-        let (target, timeout, interval, freq) = {
-            let shared = state.lock().unwrap_or_else(|err| err.into_inner());
-            (
-                shared.config.target.clone(),
-                shared.config.timeout_ms,
-                shared.config.interval_secs,
-                shared.config.ping_interval_ms,
-            )
-        };
+        let saved = config::load();
+
+        // Apply loaded config to shared state
+        {
+            let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            shared.config = PingConfig::from_saved(&saved);
+            shared.gateway_enabled = saved.gateway_enabled;
+
+            // Auto-detect gateway on startup if enabled
+            if saved.auto_detect_gateway {
+                if let Some(ip) = pinger::detect_gateway() {
+                    shared.gateway_ip = Some(ip);
+                }
+            }
+        }
 
         Self {
             state,
             active_tab: Tab::Monitor,
             auto_scroll: true,
-            config_target: target,
-            config_timeout: timeout,
-            config_interval: interval,
-            config_ping_freq: freq,
+            config_target: saved.target,
+            config_timeout: saved.timeout_ms,
+            config_interval: saved.interval_secs,
+            config_ping_freq: saved.ping_interval_ms,
+            config_gateway_enabled: saved.gateway_enabled,
+            config_auto_detect_gateway: saved.auto_detect_gateway,
+            config_duration_mins: saved.duration_mins,
             selected_preset: 0,
+            config_status: None,
         }
     }
 }
@@ -65,15 +84,13 @@ impl eframe::App for NetworkMonitorApp {
 
 impl NetworkMonitorApp {
     fn render_sidebar(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::left("config_panel")
+        egui::SidePanel::left("control_panel")
             .resizable(true)
-            .default_width(210.0)
+            .default_width(180.0)
             .show(ctx, |ui| {
-                self.render_config_section(ui);
+                self.render_start_stop(ui);
                 ui.separator();
                 self.render_gateway_section(ui);
-                ui.separator();
-                self.render_start_stop(ui);
                 ui.separator();
                 self.render_quick_stats(ui);
                 ui.separator();
@@ -81,52 +98,11 @@ impl NetworkMonitorApp {
             });
     }
 
-    fn render_config_section(&mut self, ui: &mut egui::Ui) {
-        ui.heading("⚙ Configuration");
-        ui.separator();
-
-        ui.label("Quick presets:");
-        egui::ComboBox::from_id_salt("preset_combo")
-            .selected_text(format!(
-                "{} ({})",
-                PRESETS[self.selected_preset].0,
-                PRESETS[self.selected_preset].1
-            ))
-            .show_ui(ui, |ui| {
-                for (idx, (ip, name)) in PRESETS.iter().enumerate() {
-                    if ui.selectable_value(&mut self.selected_preset, idx, format!("{ip} ({name})")).clicked() {
-                        self.config_target = ip.to_string();
-                    }
-                }
-            });
-        ui.add_space(4.0);
-
-        ui.label("Target host:");
-        ui.text_edit_singleline(&mut self.config_target);
-        ui.add_space(4.0);
-
-        ui.label("Timeout (ms):");
-        ui.add(egui::DragValue::new(&mut self.config_timeout).range(100..=30000).speed(50).suffix(" ms"));
-        ui.add_space(4.0);
-
-        ui.label("Report interval (s):");
-        ui.add(egui::DragValue::new(&mut self.config_interval).range(5..=3600).speed(1).suffix(" s"));
-        ui.add_space(4.0);
-
-        ui.label("Ping frequency (ms):");
-        ui.add(egui::DragValue::new(&mut self.config_ping_freq).range(100..=10000).speed(50).suffix(" ms"));
-        ui.add_space(8.0);
-
-        if ui.button("✅ Apply Config").clicked() {
-            self.apply_config();
-        }
-    }
-
     fn render_gateway_section(&mut self, ui: &mut egui::Ui) {
         ui.heading("🌐 Gateway");
-        let (gateway_ip, gateway_enabled) = {
+        let gateway_ip = {
             let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
-            (shared.gateway_ip.clone(), shared.gateway_enabled)
+            shared.gateway_ip.clone()
         };
 
         match &gateway_ip {
@@ -141,28 +117,48 @@ impl NetworkMonitorApp {
                     shared.gateway_ip = Some(ip);
                 }
             }
-            let mut enabled = gateway_enabled;
-            if ui.checkbox(&mut enabled, "Monitor").changed() {
-                let mut shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
-                shared.gateway_enabled = enabled;
-            }
         });
     }
 
     fn render_start_stop(&mut self, ui: &mut egui::Ui) {
-        let running = {
+        let (running, elapsed_display, duration_secs, elapsed_secs) = {
             let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
-            shared.running
+            (shared.running, shared.elapsed_display(), shared.config.duration_secs, shared.elapsed_secs())
         };
 
+        let button_size = egui::vec2(ui.available_width(), 32.0);
+
         if running {
-            if ui.button("⏹ Stop").clicked() {
-                self.state.lock().unwrap_or_else(|err| err.into_inner()).running = false;
+            let btn = egui::Button::new(
+                egui::RichText::new("⏹ Stop").size(16.0).strong()
+            ).min_size(button_size);
+            if ui.add(btn).clicked() {
+                let mut shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+                shared.flush_partial_report();
+                shared.running = false;
             }
             ui.colored_label(egui::Color32::from_rgb(100, 255, 100), "● RUNNING");
+
+            // Show elapsed time
+            ui.label(format!("⏱ Elapsed: {}", elapsed_display));
+
+            // Show progress if duration is set
+            if duration_secs > 0 {
+                let progress = (elapsed_secs / duration_secs as f64).min(1.0);
+                let remaining_secs = (duration_secs as f64 - elapsed_secs).max(0.0) as u64;
+                let remaining_mins = remaining_secs / 60;
+                let remaining_sec = remaining_secs % 60;
+                ui.add(egui::ProgressBar::new(progress as f32)
+                    .text(format!("{}m {}s remaining", remaining_mins, remaining_sec)));
+            }
         } else {
-            if ui.button("▶ Start").clicked() {
-                self.state.lock().unwrap_or_else(|err| err.into_inner()).running = true;
+            let btn = egui::Button::new(
+                egui::RichText::new("▶ Start").size(16.0).strong()
+            ).min_size(button_size);
+            if ui.add(btn).clicked() {
+                let mut shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+                shared.start_time = None; // reset elapsed timer on new start
+                shared.running = true;
             }
             ui.colored_label(egui::Color32::from_rgb(255, 100, 100), "● STOPPED");
         }
@@ -201,6 +197,8 @@ impl NetworkMonitorApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, Tab::Monitor, "📊 Monitor");
                 ui.selectable_value(&mut self.active_tab, Tab::Console, "🖥 Console");
+                ui.selectable_value(&mut self.active_tab, Tab::Config, "⚙ Config");
+                ui.selectable_value(&mut self.active_tab, Tab::Help, "❓ Help");
             });
             ui.separator();
 
@@ -210,8 +208,75 @@ impl NetworkMonitorApp {
                     monitor::render(ui, &shared);
                 }
                 Tab::Console => self.render_console(ui),
+                Tab::Config => self.render_config_tab(ui),
+                Tab::Help => help::render(ui),
             }
         });
+    }
+
+    fn render_config_tab(&mut self, ui: &mut egui::Ui) {
+        ui.heading("⚙ Configuration");
+        ui.add_space(8.0);
+
+        // Target presets
+        ui.label("Quick presets:");
+        egui::ComboBox::from_id_salt("preset_combo")
+            .selected_text(format!(
+                "{} ({})",
+                PRESETS[self.selected_preset].0,
+                PRESETS[self.selected_preset].1
+            ))
+            .show_ui(ui, |ui| {
+                for (idx, (ip, name)) in PRESETS.iter().enumerate() {
+                    if ui.selectable_value(&mut self.selected_preset, idx, format!("{ip} ({name})")).clicked() {
+                        self.config_target = ip.to_string();
+                    }
+                }
+            });
+        ui.add_space(8.0);
+
+        // Editable fields
+        ui.label("Target host:");
+        ui.text_edit_singleline(&mut self.config_target);
+        ui.add_space(4.0);
+
+        ui.label("Timeout (ms):");
+        ui.add(egui::DragValue::new(&mut self.config_timeout).range(100..=30000).speed(50).suffix(" ms"));
+        ui.add_space(4.0);
+
+        ui.label("Report interval (s):");
+        ui.add(egui::DragValue::new(&mut self.config_interval).range(5..=3600).speed(1).suffix(" s"));
+        ui.add_space(4.0);
+
+        ui.label("Ping frequency (ms):");
+        ui.add(egui::DragValue::new(&mut self.config_ping_freq).range(100..=10000).speed(50).suffix(" ms"));
+        ui.add_space(4.0);
+
+        ui.checkbox(&mut self.config_gateway_enabled, "Enable gateway monitoring");
+        ui.checkbox(&mut self.config_auto_detect_gateway, "Auto-detect gateway on startup");
+        ui.add_space(8.0);
+
+        ui.label("Test duration (minutes, 0 = unlimited):");
+        ui.add(egui::DragValue::new(&mut self.config_duration_mins).range(0..=1440).speed(1).suffix(" min"));
+        ui.add_space(12.0);
+
+        // Apply & Save buttons
+        ui.horizontal(|ui| {
+            if ui.button("✅ Apply & Save").clicked() {
+                self.apply_and_save_config();
+            }
+            if ui.button("🔄 Reset to Defaults").clicked() {
+                self.reset_config_to_defaults();
+            }
+        });
+
+        // Status message
+        if let Some((text, when)) = &self.config_status {
+            if when.elapsed().as_secs() < 5 {
+                ui.add_space(8.0);
+                ui.colored_label(egui::Color32::from_rgb(150, 200, 150), text);
+            }
+        }
     }
 
     fn render_console(&mut self, ui: &mut egui::Ui) {
@@ -250,15 +315,45 @@ impl NetworkMonitorApp {
         });
     }
 
-    fn apply_config(&mut self) {
+    fn apply_and_save_config(&mut self) {
+        // Apply to shared state
         let mut shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
         shared.config = PingConfig {
             target: self.config_target.clone(),
             timeout_ms: self.config_timeout,
             interval_secs: self.config_interval,
             ping_interval_ms: self.config_ping_freq.max(100),
+            duration_secs: self.config_duration_mins * 60,
         };
+        shared.gateway_enabled = self.config_gateway_enabled;
         shared.config_changed = true;
+        drop(shared);
+
+        // Save to disk
+        let saved = SavedConfig {
+            target: self.config_target.clone(),
+            timeout_ms: self.config_timeout,
+            interval_secs: self.config_interval,
+            ping_interval_ms: self.config_ping_freq.max(100),
+            gateway_enabled: self.config_gateway_enabled,
+            auto_detect_gateway: self.config_auto_detect_gateway,
+            duration_mins: self.config_duration_mins,
+        };
+        match config::save(&saved) {
+            Ok(()) => self.config_status = Some(("✅ Config saved".into(), Instant::now())),
+            Err(err) => self.config_status = Some((format!("❌ Save failed: {}", err), Instant::now())),
+        }
+    }
+
+    fn reset_config_to_defaults(&mut self) {
+        let defaults = SavedConfig::default();
+        self.config_target = defaults.target;
+        self.config_timeout = defaults.timeout_ms;
+        self.config_interval = defaults.interval_secs;
+        self.config_ping_freq = defaults.ping_interval_ms;
+        self.config_gateway_enabled = defaults.gateway_enabled;
+        self.config_auto_detect_gateway = defaults.auto_detect_gateway;
+        self.config_duration_mins = defaults.duration_mins;
     }
 
     fn do_export_csv(&mut self) {

@@ -1670,6 +1670,8 @@ dependencies = [
  "eframe",
  "egui_plot",
  "image",
+ "serde",
+ "toml",
  "tray-icon",
  "winapi",
 ]

@@ -69,13 +69,14 @@ pub fn detect_gateway() -> Option<String> {
 fn pinger_loop(state: SharedState) {
     loop {
         // Read config snapshot outside the write lock to minimize lock contention.
-        let (target, timeout_ms, interval_secs, ping_interval_ms, running) = {
+        let (target, timeout_ms, interval_secs, ping_interval_ms, duration_secs, running) = {
             let shared = state.lock().unwrap_or_else(|err| err.into_inner());
             (
                 shared.config.target.clone(),
                 shared.config.timeout_ms,
                 shared.config.interval_secs,
                 shared.config.ping_interval_ms,
+                shared.config.duration_secs,
                 shared.running,
             )
         };
@@ -84,6 +85,24 @@ fn pinger_loop(state: SharedState) {
         if !running {
             thread::sleep(Duration::from_millis(200));
             continue;
+        }
+
+        // Check if the test duration has been exceeded (0 = unlimited)
+        if duration_secs > 0 {
+            let elapsed = {
+                let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+                shared.elapsed_secs()
+            };
+            if elapsed >= duration_secs as f64 {
+                let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+                shared.flush_partial_report();
+                shared.running = false;
+                shared.push_log(format!(
+                    "[{}] ⏱ Test duration reached — stopped automatically",
+                    chrono::Local::now().naive_local().format("%H:%M:%S")
+                ));
+                continue;
+            }
         }
 
         // Execute the ping and measure wall-clock time for sleep compensation
@@ -103,6 +122,14 @@ fn pinger_loop(state: SharedState) {
                 shared.config_changed = false;
             }
 
+            // Set start_time on first ping
+            if shared.start_time.is_none() {
+                shared.start_time = Some(Instant::now());
+            }
+            let elapsed_secs = shared.start_time
+                .map(|start| start.elapsed().as_secs_f64())
+                .unwrap_or(0.0);
+
             // Update counters
             shared.seq_counter += 1;
             let seq = shared.seq_counter;
@@ -116,6 +143,7 @@ fn pinger_loop(state: SharedState) {
                 success,
                 latency_ms,
                 timestamp: now,
+                elapsed_secs,
             };
 
             // Push result into the bounded ring buffer (also computes jitter)

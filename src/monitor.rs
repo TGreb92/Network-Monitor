@@ -67,13 +67,30 @@ fn render_gateway_stats(ui: &mut egui::Ui, state: &PingState) {
     });
 }
 
-/// Latency-over-time chart with optional gateway overlay
+/// Latency-over-time chart with timeout markers and optional gateway overlay.
+/// X-axis is elapsed seconds; hover shows time, latency, and timeout status.
 fn render_latency_chart(ui: &mut egui::Ui, state: &PingState) {
     ui.heading("Latency Over Time");
 
-    let ext_line = Line::new(latency_to_plot_points(&state.all_latencies))
+    // Build latency line — only successful pings, using elapsed time as X
+    let latency_points: Vec<[f64; 2]> = state.results
+        .iter()
+        .filter_map(|result| result.latency_ms.map(|ms| [result.elapsed_secs, ms]))
+        .collect();
+    let ext_line = Line::new(PlotPoints::new(latency_points))
         .color(egui::Color32::from_rgb(100, 200, 255))
-        .name("External (ms)");
+        .name("Latency (ms)");
+
+    // Build timeout markers — red dots at y=0 at the exact time they occurred
+    let timeout_points: Vec<[f64; 2]> = state.results
+        .iter()
+        .filter(|result| !result.success)
+        .map(|result| [result.elapsed_secs, 0.0])
+        .collect();
+    let timeout_markers = egui_plot::Points::new(timeout_points)
+        .color(egui::Color32::RED)
+        .radius(3.0)
+        .name("Timeout");
 
     let gw_line = Line::new(latency_to_plot_points(&state.gw_all_latencies))
         .color(egui::Color32::from_rgb(255, 200, 100))
@@ -81,15 +98,36 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState) {
 
     let show_gateway = state.gateway_enabled && state.gateway_ip.is_some();
 
+    // Format X-axis labels as minutes:seconds
+    let x_fmt = |mark: egui_plot::GridMark, _range: &std::ops::RangeInclusive<f64>| {
+        let total_secs = mark.value as u64;
+        let mins = total_secs / 60;
+        let secs = total_secs % 60;
+        format!("{}:{:02}", mins, secs)
+    };
+
     Plot::new("latency_plot")
-        .height(180.0)
+        .height(200.0)
         .allow_drag(false)
         .allow_zoom(false)
         .show_axes(true)
+        .x_axis_label("Time (m:ss)")
         .y_axis_label("ms")
+        .x_axis_formatter(x_fmt)
+        .label_formatter(|name, value| {
+            let total_secs = value.x as u64;
+            let mins = total_secs / 60;
+            let secs = total_secs % 60;
+            if name == "Timeout" {
+                format!("⏱ {}:{:02}\n❌ Timeout", mins, secs)
+            } else {
+                format!("⏱ {}:{:02}\n📶 {:.1} ms", mins, secs, value.y)
+            }
+        })
         .legend(egui_plot::Legend::default())
         .show(ui, |plot_ui| {
             plot_ui.line(ext_line);
+            plot_ui.points(timeout_markers);
             if show_gateway { plot_ui.line(gw_line); }
         });
 }
