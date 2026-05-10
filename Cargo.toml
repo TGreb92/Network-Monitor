@@ -7,8 +7,6 @@ description = "A lightweight desktop network monitor built with egui"
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "persistence"] }
 egui_plot = "0.31"
-image = { version = "0.25", default-features = false, features = ["png"] }
-tray-icon = "0.19"
 chrono = "0.4"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

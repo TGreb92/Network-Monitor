@@ -84,6 +84,6 @@ pub fn load() -> SavedConfig {
 pub fn save(config: &SavedConfig) -> std::io::Result<()> {
     let path = config_path();
     let contents = toml::to_string_pretty(config)
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+        .map_err(std::io::Error::other)?;
     std::fs::write(&path, contents)
 }

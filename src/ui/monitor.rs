@@ -89,60 +89,21 @@ fn render_gateway_stats(ui: &mut egui::Ui, state: &PingState) {
 
 /// Latency-over-time chart with time window selector, timeout markers, and gateway overlay.
 fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut MonitorState) {
-    ui.horizontal(|ui| {
-        ui.heading("Latency Over Time");
-        ui.add_space(16.0);
-        for (idx, (_secs, label)) in TIME_WINDOWS.iter().enumerate() {
-            if ui.selectable_label(monitor.selected_window == idx, *label).clicked() {
-                monitor.selected_window = idx;
-            }
-        }
-    });
+    render_window_selector(ui, monitor);
 
     let elapsed = state.elapsed_secs();
     let window_secs = TIME_WINDOWS[monitor.selected_window].0;
     let min_time = if window_secs > 0.0 { (elapsed - window_secs).max(0.0) } else { 0.0 };
 
-    // Build latency line — filter to visible window
-    let latency_points: Vec<[f64; 2]> = state.results
-        .iter()
-        .filter(|result| result.elapsed_secs >= min_time)
-        .filter_map(|result| result.latency_ms.map(|ms| [result.elapsed_secs, ms]))
-        .collect();
-    let ext_line = Line::new(PlotPoints::new(latency_points))
-        .color(egui::Color32::from_rgb(100, 200, 255))
-        .name("Latency (ms)");
-
-    // Build timeout markers — filter to visible window
-    let timeout_points: Vec<[f64; 2]> = state.results
-        .iter()
-        .filter(|result| !result.success && result.elapsed_secs >= min_time)
-        .map(|result| [result.elapsed_secs, 0.0])
-        .collect();
-    let timeout_markers = egui_plot::Points::new(timeout_points)
-        .color(egui::Color32::RED)
-        .radius(3.0)
-        .name("Timeout");
-
-    let gw_line = Line::new(latency_to_plot_points(&state.gw_all_latencies))
-        .color(egui::Color32::from_rgb(255, 200, 100))
-        .name("Gateway (ms)");
-
+    let (ext_line, timeout_markers) = build_external_chart_data(state, min_time);
+    let gw_line = build_gateway_chart_data(state, window_secs);
+    let visible_results = build_tooltip_data(state, min_time);
     let show_gateway = state.gateway_enabled && state.gateway_ip.is_some();
 
     let x_fmt = |mark: egui_plot::GridMark, _range: &std::ops::RangeInclusive<f64>| {
         let total_secs = mark.value as u64;
-        let mins = total_secs / 60;
-        let secs = total_secs % 60;
-        format!("{}:{:02}", mins, secs)
+        format!("{}:{:02}", total_secs / 60, total_secs % 60)
     };
-
-    // Collect visible results for the snap-to-nearest tooltip
-    let visible_results: Vec<(f64, Option<f64>, bool)> = state.results
-        .iter()
-        .filter(|result| result.elapsed_secs >= min_time)
-        .map(|result| (result.elapsed_secs, result.latency_ms, result.success))
-        .collect();
 
     let mut plot = Plot::new("latency_plot")
         .height(200.0)
@@ -154,44 +115,15 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
         .x_axis_label("Time (m:ss)")
         .y_axis_label("ms")
         .x_axis_formatter(x_fmt)
-        .label_formatter(move |_name, value| {
-            // Find the nearest data point by elapsed time
-            let cursor_time = value.x;
-            let nearest = visible_results.iter().min_by(|point_a, point_b| {
-                let dist_a = (point_a.0 - cursor_time).abs();
-                let dist_b = (point_b.0 - cursor_time).abs();
-                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            match nearest {
-                Some((elapsed, latency, success)) => {
-                    let total_secs = *elapsed as u64;
-                    let mins = total_secs / 60;
-                    let secs = total_secs % 60;
-                    if *success {
-                        format!("⏱ {}:{:02}\n📶 {:.1} ms",
-                            mins, secs,
-                            latency.unwrap_or(0.0))
-                    } else {
-                        format!("⏱ {}:{:02}\n❌ Timeout", mins, secs)
-                    }
-                }
-                None => "No data".to_string(),
-            }
-        })
+        .label_formatter(move |_name, value| format_nearest_tooltip(&visible_results, value.x))
         .legend(egui_plot::Legend::default());
 
-    // Lock the X-axis to always show the full window width.
-    // When data is sparse, this keeps the chart spread out left-to-right.
+    // Lock the X-axis to always show the full window width
     if window_secs > 0.0 {
         let max_time = elapsed.max(window_secs);
-        plot = plot
-            .include_x(max_time - window_secs)
-            .include_x(max_time);
+        plot = plot.include_x(max_time - window_secs).include_x(max_time);
     } else if elapsed > 0.0 {
-        plot = plot
-            .include_x(0.0)
-            .include_x(elapsed);
+        plot = plot.include_x(0.0).include_x(elapsed);
     }
 
     plot.show(ui, |plot_ui| {
@@ -199,6 +131,93 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
         plot_ui.points(timeout_markers);
         if show_gateway { plot_ui.line(gw_line); }
     });
+}
+
+fn render_window_selector(ui: &mut egui::Ui, monitor: &mut MonitorState) {
+    ui.horizontal(|ui| {
+        ui.heading("Latency Over Time");
+        ui.add_space(16.0);
+        for (idx, (_secs, label)) in TIME_WINDOWS.iter().enumerate() {
+            if ui.selectable_label(monitor.selected_window == idx, *label).clicked() {
+                monitor.selected_window = idx;
+            }
+        }
+    });
+}
+
+fn build_external_chart_data(state: &PingState, min_time: f64) -> (Line<'_>, egui_plot::Points<'_>) {
+    let latency_points: Vec<[f64; 2]> = state.results
+        .iter()
+        .filter(|result| result.elapsed_secs >= min_time)
+        .filter_map(|result| result.latency_ms.map(|ms| [result.elapsed_secs, ms]))
+        .collect();
+    let ext_line = Line::new(PlotPoints::new(latency_points))
+        .color(egui::Color32::from_rgb(100, 200, 255))
+        .name("Latency (ms)");
+
+    let timeout_points: Vec<[f64; 2]> = state.results
+        .iter()
+        .filter(|result| !result.success && result.elapsed_secs >= min_time)
+        .map(|result| [result.elapsed_secs, 0.0])
+        .collect();
+    let timeout_markers = egui_plot::Points::new(timeout_points)
+        .color(egui::Color32::RED)
+        .radius(3.0)
+        .name("Timeout");
+
+    (ext_line, timeout_markers)
+}
+
+/// Build gateway chart data, showing only the last `window_secs` worth of points.
+/// Gateway latencies don't have timestamps, so we estimate based on count.
+fn build_gateway_chart_data(state: &PingState, window_secs: f64) -> Line<'_> {
+    let total = state.gw_all_latencies.len();
+    let skip_count = if window_secs > 0.0 && total > window_secs as usize {
+        total - window_secs as usize
+    } else {
+        0
+    };
+
+    let points: Vec<[f64; 2]> = state.gw_all_latencies
+        .iter()
+        .enumerate()
+        .skip(skip_count)
+        .map(|(idx, &lat)| [idx as f64, lat])
+        .collect();
+
+    Line::new(PlotPoints::new(points))
+        .color(egui::Color32::from_rgb(255, 200, 100))
+        .name("Gateway (ms)")
+}
+
+fn build_tooltip_data(state: &PingState, min_time: f64) -> Vec<(f64, Option<f64>, bool)> {
+    state.results
+        .iter()
+        .filter(|result| result.elapsed_secs >= min_time)
+        .map(|result| (result.elapsed_secs, result.latency_ms, result.success))
+        .collect()
+}
+
+fn format_nearest_tooltip(visible_results: &[(f64, Option<f64>, bool)], cursor_time: f64) -> String {
+    let nearest = visible_results.iter().min_by(|point_a, point_b| {
+        let dist_a = (point_a.0 - cursor_time).abs();
+        let dist_b = (point_b.0 - cursor_time).abs();
+        dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    match nearest {
+        Some((elapsed, latency, success)) => {
+            let total_secs = *elapsed as u64;
+            let mins = total_secs / 60;
+            let secs = total_secs % 60;
+            if *success {
+                format!("⏱ {}:{:02}\n📶 {:.1} ms", mins, secs, latency.unwrap_or(0.0))
+            } else {
+                format!("⏱ {}:{:02}\n❌ Timeout", mins, secs)
+            }
+        }
+        None => "No data".to_string(),
+    }
 }
 
 /// Scrollable interval reports table (newest first)
@@ -236,12 +255,6 @@ fn render_interval_reports(ui: &mut egui::Ui, state: &PingState) {
         });
 }
 
-/// Convert a VecDeque of latencies into plot points [index, value]
-fn latency_to_plot_points(latencies: &std::collections::VecDeque<f64>) -> PlotPoints<'_> {
-    PlotPoints::new(
-        latencies.iter().enumerate().map(|(i, &lat)| [i as f64, lat]).collect()
-    )
-}
 
 /// Determine connection quality verdict from loss and latency
 fn connection_verdict(loss: f64, avg: f64, total_sent: u64) -> (&'static str, egui::Color32) {

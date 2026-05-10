@@ -153,14 +153,12 @@ fn render_preset_form(ui: &mut egui::Ui, cfg: &mut ConfigState, sidebar: &mut Si
                 }
                 clear_form(cfg);
             }
-        } else {
-            if ui.add_enabled(can_save, egui::Button::new("➕ Add")).clicked() {
-                sidebar.presets.push(TargetPreset {
-                    name: cfg.edit_name.trim().to_string(),
-                    host: cfg.edit_host.trim().to_string(),
-                });
-                clear_form(cfg);
-            }
+        } else if ui.add_enabled(can_save, egui::Button::new("➕ Add")).clicked() {
+            sidebar.presets.push(TargetPreset {
+                name: cfg.edit_name.trim().to_string(),
+                host: cfg.edit_host.trim().to_string(),
+            });
+            clear_form(cfg);
         }
         if ui.button("Cancel").clicked() {
             clear_form(cfg);

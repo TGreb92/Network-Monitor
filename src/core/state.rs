@@ -70,8 +70,6 @@ pub struct PingResult {
 /// A single line in the console log
 #[derive(Clone, Debug)]
 pub struct PingLogEntry {
-    /// Local timestamp for this log entry
-    pub timestamp: chrono::NaiveDateTime,
     /// Formatted log message (e.g. "[12:34:56] #42 Reply from 8.8.8.8: time=15ms")
     pub message: String,
 }
@@ -244,10 +242,7 @@ impl PingState {
 
     /// Append a message to the console log. Evicts the oldest entry if at capacity.
     pub fn push_log(&mut self, message: String) {
-        let entry = PingLogEntry {
-            timestamp: chrono::Local::now().naive_local(),
-            message,
-        };
+        let entry = PingLogEntry { message };
         if self.log_entries.len() >= MAX_LOG_ENTRIES {
             self.log_entries.pop_front();
         }

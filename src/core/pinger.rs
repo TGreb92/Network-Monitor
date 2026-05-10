@@ -64,142 +64,169 @@ pub fn detect_gateway() -> Option<String> {
     }
 }
 
-/// Main pinger loop for the external target. Runs indefinitely, checking the
-/// `running` flag each iteration. Uses configurable ping interval.
+/// Main pinger loop. Runs indefinitely, checking the `running` flag each iteration.
 fn pinger_loop(state: SharedState) {
     loop {
-        // Read config snapshot outside the write lock to minimize lock contention.
-        let (target, timeout_ms, interval_secs, ping_interval_ms, duration_secs, running) = {
-            let shared = state.lock().unwrap_or_else(|err| err.into_inner());
-            (
-                shared.config.target.clone(),
-                shared.config.timeout_ms,
-                shared.config.interval_secs,
-                shared.config.ping_interval_ms,
-                shared.config.duration_secs,
-                shared.running,
-            )
-        };
+        let config_snapshot = read_config_snapshot(&state);
 
-        // If monitoring is paused, sleep briefly and re-check
-        if !running {
+        if !config_snapshot.running {
             thread::sleep(Duration::from_millis(200));
             continue;
         }
 
-        // Check if the test duration has been exceeded (0 = unlimited)
-        if duration_secs > 0 {
-            let elapsed = {
-                let shared = state.lock().unwrap_or_else(|err| err.into_inner());
-                shared.elapsed_secs()
-            };
-            if elapsed >= duration_secs as f64 {
-                let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
-                shared.flush_partial_report();
-                shared.running = false;
-                shared.push_log(format!(
-                    "[{}] ⏱ Test duration reached — stopped automatically",
-                    chrono::Local::now().naive_local().format("%H:%M:%S")
-                ));
-                continue;
-            }
+        if check_and_stop_if_duration_exceeded(&state, config_snapshot.duration_secs) {
+            continue;
         }
 
-        // Execute the ping and measure wall-clock time for sleep compensation
         let ping_start = Instant::now();
-        let (success, latency_ms, output_line) = execute_ping(&target, timeout_ms);
-        let now = chrono::Local::now().naive_local();
+        let (success, latency_ms, output_line) = execute_ping(
+            &config_snapshot.target, config_snapshot.timeout_ms
+        );
 
-        // Acquire write lock to update shared state with this ping's results
-        {
-            let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+        record_ping_result(
+            &state, success, latency_ms, &output_line,
+            &config_snapshot.target, config_snapshot.interval_secs,
+        );
 
-            // If the user changed config via the GUI, reset the current interval
-            if shared.config_changed {
-                shared.interval_start = None;
-                shared.interval_start_time = None;
-                shared.interval_results.clear();
-                shared.config_changed = false;
+        sleep_until_next_ping(ping_start, config_snapshot.ping_interval_ms);
+    }
+}
+
+/// Snapshot of config values read under a single lock
+struct ConfigSnapshot {
+    target: String,
+    timeout_ms: u32,
+    interval_secs: u64,
+    ping_interval_ms: u64,
+    duration_secs: u64,
+    running: bool,
+}
+
+fn read_config_snapshot(state: &SharedState) -> ConfigSnapshot {
+    let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    ConfigSnapshot {
+        target: shared.config.target.clone(),
+        timeout_ms: shared.config.timeout_ms,
+        interval_secs: shared.config.interval_secs,
+        ping_interval_ms: shared.config.ping_interval_ms,
+        duration_secs: shared.config.duration_secs,
+        running: shared.running,
+    }
+}
+
+/// Check duration and auto-stop in a single lock (avoids race condition).
+/// Returns true if the test was stopped.
+fn check_and_stop_if_duration_exceeded(state: &SharedState, duration_secs: u64) -> bool {
+    if duration_secs == 0 {
+        return false;
+    }
+    let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    if shared.elapsed_secs() >= duration_secs as f64 {
+        shared.flush_partial_report();
+        shared.running = false;
+        shared.push_log(format!(
+            "[{}] ⏱ Test duration reached — stopped automatically",
+            chrono::Local::now().naive_local().format("%H:%M:%S")
+        ));
+        true
+    } else {
+        false
+    }
+}
+
+/// Record a ping result into shared state under a single lock.
+fn record_ping_result(
+    state: &SharedState,
+    success: bool,
+    latency_ms: Option<f64>,
+    output_line: &str,
+    target: &str,
+    interval_secs: u64,
+) {
+    let now = chrono::Local::now().naive_local();
+    let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+
+    if shared.config_changed {
+        shared.interval_start = None;
+        shared.interval_start_time = None;
+        shared.interval_results.clear();
+        shared.config_changed = false;
+    }
+
+    if shared.start_time.is_none() {
+        shared.start_time = Some(Instant::now());
+    }
+    let elapsed_secs = shared.start_time
+        .map(|start| start.elapsed().as_secs_f64())
+        .unwrap_or(0.0);
+
+    shared.seq_counter += 1;
+    let seq = shared.seq_counter;
+    shared.total_sent += 1;
+    if success {
+        shared.total_received += 1;
+    }
+
+    let result = PingResult {
+        seq,
+        success,
+        latency_ms,
+        timestamp: now,
+        elapsed_secs,
+    };
+    shared.push_result(result.clone());
+
+    let log_msg = if success {
+        format!(
+            "[{}] #{} Reply from {}: time={}ms",
+            now.format("%H:%M:%S"), seq, target,
+            latency_ms.map(|lat| format!("{:.0}", lat)).unwrap_or("?".into())
+        )
+    } else {
+        format!("[{}] #{} Request timed out ({})", now.format("%H:%M:%S"), seq, output_line)
+    };
+    shared.push_log(log_msg);
+
+    accumulate_interval(&mut shared, result, now, interval_secs);
+}
+
+/// Accumulate results for the current interval and generate a report when elapsed.
+fn accumulate_interval(
+    shared: &mut crate::core::state::PingState,
+    result: PingResult,
+    now: chrono::NaiveDateTime,
+    interval_secs: u64,
+) {
+    if shared.interval_start.is_none() {
+        shared.interval_start = Some(Instant::now());
+        shared.interval_start_time = Some(now);
+    }
+    shared.interval_results.push(result);
+
+    if let Some(start) = shared.interval_start {
+        if start.elapsed() >= Duration::from_secs(interval_secs) {
+            let report = generate_report(
+                &shared.interval_results,
+                shared.interval_start_time.unwrap_or(now),
+                now,
+            );
+            shared.interval_reports.push_back(report);
+            if shared.interval_reports.len() > 256 {
+                shared.interval_reports.pop_front();
             }
-
-            // Set start_time on first ping
-            if shared.start_time.is_none() {
-                shared.start_time = Some(Instant::now());
-            }
-            let elapsed_secs = shared.start_time
-                .map(|start| start.elapsed().as_secs_f64())
-                .unwrap_or(0.0);
-
-            // Update counters
-            shared.seq_counter += 1;
-            let seq = shared.seq_counter;
-            shared.total_sent += 1;
-            if success {
-                shared.total_received += 1;
-            }
-
-            let result = PingResult {
-                seq,
-                success,
-                latency_ms,
-                timestamp: now,
-                elapsed_secs,
-            };
-
-            // Push result into the bounded ring buffer (also computes jitter)
-            shared.push_result(result.clone());
-
-            // Format a human-readable log message for the console tab
-            let log_msg = if success {
-                format!(
-                    "[{}] #{} Reply from {}: time={}ms",
-                    now.format("%H:%M:%S"),
-                    seq,
-                    target,
-                    latency_ms.map(|lat| format!("{:.0}", lat)).unwrap_or("?".into())
-                )
-            } else {
-                format!(
-                    "[{}] #{} Request timed out ({})",
-                    now.format("%H:%M:%S"),
-                    seq,
-                    output_line
-                )
-            };
-            shared.push_log(log_msg);
-
-            // --- Interval report accumulation ---
-            if shared.interval_start.is_none() {
-                shared.interval_start = Some(Instant::now());
-                shared.interval_start_time = Some(now);
-            }
-            shared.interval_results.push(result);
-
-            // Check if the current interval has elapsed; if so, generate a report
-            if let Some(start) = shared.interval_start {
-                if start.elapsed() >= Duration::from_secs(interval_secs) {
-                    let report = generate_report(
-                        &shared.interval_results,
-                        shared.interval_start_time.unwrap_or(now),
-                        now,
-                    );
-                    shared.interval_reports.push_back(report);
-                    if shared.interval_reports.len() > 256 {
-                        shared.interval_reports.pop_front();
-                    }
-                    shared.interval_results.clear();
-                    shared.interval_start = Some(Instant::now());
-                    shared.interval_start_time = Some(now);
-                }
-            }
+            shared.interval_results.clear();
+            shared.interval_start = Some(Instant::now());
+            shared.interval_start_time = Some(now);
         }
+    }
+}
 
-        // Compensate sleep to maintain configured ping cadence.
-        let interval = Duration::from_millis(ping_interval_ms);
-        let elapsed = ping_start.elapsed();
-        if elapsed < interval {
-            thread::sleep(interval - elapsed);
-        }
+/// Sleep to maintain the configured ping cadence, minus time already spent.
+fn sleep_until_next_ping(ping_start: Instant, ping_interval_ms: u64) {
+    let interval = Duration::from_millis(ping_interval_ms);
+    let elapsed = ping_start.elapsed();
+    if elapsed < interval {
+        thread::sleep(interval - elapsed);
     }
 }
 
