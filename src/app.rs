@@ -157,7 +157,7 @@ impl NetworkMonitorApp {
             ).min_size(button_size);
             if ui.add(btn).clicked() {
                 let mut shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
-                shared.start_time = None; // reset elapsed timer on new start
+                shared.reset_data();
                 shared.running = true;
             }
             ui.colored_label(egui::Color32::from_rgb(255, 100, 100), "● STOPPED");

@@ -370,6 +370,28 @@ impl PingState {
         self.interval_start = None;
         self.interval_start_time = None;
     }
+
+    /// Clear all accumulated data for a fresh run (keeps config intact)
+    pub fn reset_data(&mut self) {
+        self.results.clear();
+        self.log_entries.clear();
+        self.interval_reports.clear();
+        self.all_latencies.clear();
+        self.total_sent = 0;
+        self.total_received = 0;
+        self.seq_counter = 0;
+        self.interval_start = None;
+        self.interval_start_time = None;
+        self.interval_results.clear();
+        self.start_time = None;
+        self.last_latency = None;
+        self.jitter_values.clear();
+        self.gw_total_sent = 0;
+        self.gw_total_received = 0;
+        self.gw_all_latencies.clear();
+        self.gw_last_latency = None;
+        self.gw_jitter_values.clear();
+    }
 }
 
 /// Thread-safe shared state handle.
