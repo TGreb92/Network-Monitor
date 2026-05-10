@@ -137,8 +137,10 @@ fn render_interval_reports(ui: &mut egui::Ui, state: &PingState) {
     if state.interval_reports.is_empty() { return; }
 
     ui.heading("Interval Reports");
+    let available_height = ui.available_height() - 8.0;
     egui::ScrollArea::vertical()
-        .max_height(200.0)
+        .max_height(available_height.max(60.0))
+        .auto_shrink([false; 2])
         .show(ui, |ui| {
             egui::Grid::new("reports_grid")
                 .striped(true)

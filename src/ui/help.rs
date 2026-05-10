@@ -8,6 +8,8 @@ use eframe::egui;
 /// Render the Help tab contents
 pub fn render(ui: &mut egui::Ui) {
     egui::ScrollArea::vertical().show(ui, |ui| {
+        render_sidebar_section(ui);
+        ui.add_space(12.0);
         render_metrics_section(ui);
         ui.add_space(12.0);
         render_chart_section(ui);
@@ -18,6 +20,41 @@ pub fn render(ui: &mut egui::Ui) {
         ui.add_space(12.0);
         render_tips_section(ui);
     });
+}
+
+fn render_sidebar_section(ui: &mut egui::Ui) {
+    ui.heading("📋 Sidebar — Stats Explained");
+    ui.add_space(4.0);
+
+    help_item(ui, "Target Selector",
+        "Dropdown to choose which preset target to ping.\n\
+         Presets are configured in the Config tab. Changing target takes effect on next Start.");
+
+    help_item(ui, "Sent / Received",
+        "Total number of pings sent and successful replies received.\n\
+         The difference is the number of lost packets.");
+
+    help_item(ui, "Loss %",
+        "Percentage of pings that timed out: (sent - received) / sent × 100");
+
+    help_item(ui, "Lost",
+        "Absolute count of individual pings that got no reply.");
+
+    help_item(ui, "Loss Events",
+        "Number of distinct connectivity drops (loss batches).\n\
+         A loss event is a cluster of consecutive timeouts.\n\
+         Example: ✅✅❌❌❌✅✅❌✅ = 7 lost but only 2 loss events.\n\
+         This tells you how many TIMES connectivity dropped, not just how many packets were lost.\n\
+         Fewer events with many lost packets = sustained outage.\n\
+         Many events with few lost packets each = intermittent flapping.");
+
+    help_item(ui, "Elapsed / Progress",
+        "Shows how long the current test has been running.\n\
+         If a duration is set in Config, a progress bar shows remaining time.");
+
+    help_item(ui, "Export CSV / JSON",
+        "Save all ping results and interval reports to a file.\n\
+         Files are saved next to the executable with a timestamp in the filename.");
 }
 
 fn render_metrics_section(ui: &mut egui::Ui) {
@@ -111,9 +148,11 @@ fn render_config_section(ui: &mut egui::Ui) {
     ui.heading("⚙ Config Settings");
     ui.add_space(4.0);
 
-    help_item(ui, "Target Host",
-        "IP address or hostname to ping. Default: 8.8.8.8 (Google DNS).\n\
-         Use presets for common DNS servers, or enter any IP/hostname.");
+    help_item(ui, "Target Presets",
+        "Add, edit, and delete named target presets.\n\
+         Each preset has a name (e.g. \"Game Server EU\") and a host (IP or hostname).\n\
+         Select a preset in the sidebar dropdown to use it.\n\
+         Presets are saved to network-monitor.toml.");
 
     help_item(ui, "Timeout (ms)",
         "How long to wait for a reply before marking it as lost.\n\
@@ -133,7 +172,12 @@ fn render_config_section(ui: &mut egui::Ui) {
 
     help_item(ui, "Auto-detect Gateway",
         "Automatically finds your router IP via 'ipconfig' on startup.\n\
-         Only works on Windows. You can also click 🔍 Detect manually.");
+         Only works on Windows. You can also click 🔍 Detect in the sidebar.");
+
+    help_item(ui, "Test Duration",
+        "Optional fixed-duration test. Set to 0 for unlimited (run until stopped).\n\
+         When set, the sidebar shows a progress bar with remaining time.\n\
+         The test auto-stops and flushes a final interval report when time is up.");
 }
 
 fn render_tips_section(ui: &mut egui::Ui) {

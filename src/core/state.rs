@@ -20,14 +20,6 @@ pub const MAX_LATENCIES: usize = 7200;
 /// Maximum number of jitter data points to retain
 pub const MAX_JITTER: usize = 7200;
 
-/// Built-in target presets for quick selection
-pub const PRESETS: &[(&str, &str)] = &[
-    ("8.8.8.8", "Google DNS"),
-    ("1.1.1.1", "Cloudflare DNS"),
-    ("9.9.9.9", "Quad9 DNS"),
-    ("208.67.222.222", "OpenDNS"),
-];
-
 /// User-configurable ping parameters
 #[derive(Clone, Debug)]
 pub struct PingConfig {
@@ -46,8 +38,12 @@ pub struct PingConfig {
 impl PingConfig {
     /// Create a PingConfig from a saved config loaded from disk
     pub fn from_saved(saved: &crate::core::config::SavedConfig) -> Self {
+        let target = saved.presets
+            .get(saved.selected_preset)
+            .map(|preset| preset.host.clone())
+            .unwrap_or_else(|| "8.8.8.8".to_string());
         Self {
-            target: saved.target.clone(),
+            target,
             timeout_ms: saved.timeout_ms,
             interval_secs: saved.interval_secs,
             ping_interval_ms: saved.ping_interval_ms,
@@ -148,6 +144,12 @@ pub struct PingState {
     /// Gateway jitter tracking
     pub gw_last_latency: Option<f64>,
     pub gw_jitter_values: VecDeque<f64>,
+
+    // --- Loss batch tracking ---
+    /// Number of distinct loss batches (clusters of consecutive timeouts)
+    pub loss_batches: u64,
+    /// Whether the previous ping was a loss (to detect batch boundaries)
+    pub in_loss_batch: bool,
 }
 
 impl PingState {
@@ -177,12 +179,22 @@ impl PingState {
             gw_all_latencies: VecDeque::with_capacity(MAX_LATENCIES),
             gw_last_latency: None,
             gw_jitter_values: VecDeque::with_capacity(MAX_JITTER),
+            loss_batches: 0,
+            in_loss_batch: false,
         }
     }
 
     /// Record a ping result. Evicts the oldest entry if the collection is at capacity.
-    /// Also tracks the latency and jitter separately.
+    /// Also tracks the latency, jitter, and loss batch boundaries.
     pub fn push_result(&mut self, result: PingResult) {
+        // Track loss batches: a new batch starts when we go from success → failure
+        if result.success {
+            self.in_loss_batch = false;
+        } else if !self.in_loss_batch {
+            self.loss_batches += 1;
+            self.in_loss_batch = true;
+        }
+
         if let Some(lat) = result.latency_ms {
             // Compute jitter: absolute difference between consecutive latencies
             if let Some(prev) = self.last_latency {
@@ -387,6 +399,8 @@ impl PingState {
         self.gw_all_latencies.clear();
         self.gw_last_latency = None;
         self.gw_jitter_values.clear();
+        self.loss_batches = 0;
+        self.in_loss_batch = false;
     }
 }
 

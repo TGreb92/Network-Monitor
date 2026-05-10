@@ -33,7 +33,6 @@ impl NetworkMonitorApp {
     pub fn new(state: SharedState, _cc: &eframe::CreationContext<'_>) -> Self {
         let saved = config::load();
 
-        // Apply loaded config to shared state
         {
             let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
             shared.config = PingConfig::from_saved(&saved);
@@ -49,7 +48,7 @@ impl NetworkMonitorApp {
         Self {
             state,
             active_tab: Tab::Monitor,
-            sidebar: SidebarState::new(),
+            sidebar: SidebarState::new(saved.presets.clone(), saved.selected_preset),
             console: ConsoleState::new(),
             config_tab: ConfigState::from_saved(&saved),
         }
@@ -77,7 +76,7 @@ impl eframe::App for NetworkMonitorApp {
                     monitor::render(ui, &shared);
                 }
                 Tab::Console => console::render(ui, &self.state, &mut self.console),
-                Tab::Config => config_tab::render(ui, &self.state, &mut self.config_tab),
+                Tab::Config => config_tab::render(ui, &self.state, &mut self.config_tab, &mut self.sidebar),
                 Tab::Help => help::render(ui),
             }
         });
