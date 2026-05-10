@@ -1,17 +1,15 @@
 //! # Network Monitor — GUI Layer
 //!
-//! Implements the main application window with two tabs:
-//! - **Monitor**: Live stats dashboard with latency chart and interval reports
-//! - **Console**: Scrolling ping log with color-coded success/failure entries
-//!
-//! A left sidebar provides configuration controls and start/stop functionality.
-//! The GUI reads shared state via `RwLock` at ~2 FPS (500ms repaint interval)
-//! to minimize CPU usage while staying responsive.
+//! Main application struct and sidebar. The Monitor tab rendering is in `monitor.rs`,
+//! export logic in `export.rs`, and shared widgets in `ui_helpers.rs`.
 
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints};
+use std::time::Instant;
 
-use crate::state::{PingConfig, SharedState};
+use crate::export;
+use crate::monitor;
+use crate::pinger;
+use crate::state::{PingConfig, SharedState, PRESETS};
 
 /// Which tab is currently active in the main panel
 #[derive(PartialEq)]
@@ -22,29 +20,25 @@ enum Tab {
 
 /// Main application struct holding shared state and UI-local state
 pub struct NetworkMonitorApp {
-    /// Thread-safe shared state (read by GUI, written by pinger)
     state: SharedState,
-    /// Currently selected tab
     active_tab: Tab,
-    /// Whether the console log auto-scrolls to the latest entry
     auto_scroll: bool,
-    /// Local copy of config fields for the sidebar text inputs.
-    /// These are synced to shared state only when "Apply Config" is clicked.
     config_target: String,
-    config_timeout: String,
-    config_interval: String,
+    config_timeout: u32,
+    config_interval: u64,
+    config_ping_freq: u64,
+    selected_preset: usize,
 }
 
 impl NetworkMonitorApp {
-    /// Initialize the app, reading current config from shared state to populate
-    /// the sidebar text fields.
     pub fn new(state: SharedState, _cc: &eframe::CreationContext<'_>) -> Self {
-        let (target, timeout, interval) = {
-            let s = state.read().unwrap_or_else(|e| e.into_inner());
+        let (target, timeout, interval, freq) = {
+            let shared = state.lock().unwrap_or_else(|err| err.into_inner());
             (
-                s.config.target.clone(),
-                s.config.timeout_ms.to_string(),
-                s.config.interval_secs.to_string(),
+                shared.config.target.clone(),
+                shared.config.timeout_ms,
+                shared.config.interval_secs,
+                shared.config.ping_interval_ms,
             )
         };
 
@@ -55,88 +49,155 @@ impl NetworkMonitorApp {
             config_target: target,
             config_timeout: timeout,
             config_interval: interval,
+            config_ping_freq: freq,
+            selected_preset: 0,
         }
     }
 }
 
 impl eframe::App for NetworkMonitorApp {
-    /// Called by eframe each frame. Schedules the next repaint after 500ms
-    /// to keep CPU usage low while displaying near-real-time data.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
-
         self.render_sidebar(ctx);
         self.render_main(ctx);
     }
 }
 
 impl NetworkMonitorApp {
-    /// Render the left sidebar with config inputs, start/stop button, and quick stats
     fn render_sidebar(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("config_panel")
             .resizable(true)
-            .default_width(200.0)
+            .default_width(210.0)
             .show(ctx, |ui| {
-                ui.heading("⚙ Configuration");
+                self.render_config_section(ui);
                 ui.separator();
-
-                // Editable config fields — changes are buffered locally until Apply is clicked
-                ui.label("Target host:");
-                ui.text_edit_singleline(&mut self.config_target);
-                ui.add_space(4.0);
-
-                ui.label("Timeout (ms):");
-                ui.text_edit_singleline(&mut self.config_timeout);
-                ui.add_space(4.0);
-
-                ui.label("Report interval (s):");
-                ui.text_edit_singleline(&mut self.config_interval);
-                ui.add_space(8.0);
-
-                // Push local config edits into shared state
-                if ui.button("✅ Apply Config").clicked() {
-                    self.apply_config();
-                }
-
+                self.render_gateway_section(ui);
                 ui.separator();
-
-                // Start/Stop toggle — reads and writes the `running` flag
-                let running = {
-                    let s = self.state.read().unwrap_or_else(|e| e.into_inner());
-                    s.running
-                };
-
-                if running {
-                    if ui.button("⏹ Stop").clicked() {
-                        let mut s = self.state.write().unwrap_or_else(|e| e.into_inner());
-                        s.running = false;
-                    }
-                    ui.colored_label(egui::Color32::from_rgb(100, 255, 100), "● RUNNING");
-                } else {
-                    if ui.button("▶ Start").clicked() {
-                        let mut s = self.state.write().unwrap_or_else(|e| e.into_inner());
-                        s.running = true;
-                    }
-                    ui.colored_label(egui::Color32::from_rgb(255, 100, 100), "● STOPPED");
-                }
-
+                self.render_start_stop(ui);
                 ui.separator();
-
-                // Quick stats summary in the sidebar
-                let (sent, recv, loss) = {
-                    let s = self.state.read().unwrap_or_else(|e| e.into_inner());
-                    (s.total_sent, s.total_received, s.packet_loss_pct())
-                };
-                ui.label(format!("Sent: {}", sent));
-                ui.label(format!("Received: {}", recv));
-                ui.label(format!("Loss: {:.1}%", loss));
+                self.render_quick_stats(ui);
+                ui.separator();
+                self.render_export_section(ui);
             });
     }
 
-    /// Render the main central panel with tab selector and active tab content
+    fn render_config_section(&mut self, ui: &mut egui::Ui) {
+        ui.heading("⚙ Configuration");
+        ui.separator();
+
+        ui.label("Quick presets:");
+        egui::ComboBox::from_id_salt("preset_combo")
+            .selected_text(format!(
+                "{} ({})",
+                PRESETS[self.selected_preset].0,
+                PRESETS[self.selected_preset].1
+            ))
+            .show_ui(ui, |ui| {
+                for (idx, (ip, name)) in PRESETS.iter().enumerate() {
+                    if ui.selectable_value(&mut self.selected_preset, idx, format!("{ip} ({name})")).clicked() {
+                        self.config_target = ip.to_string();
+                    }
+                }
+            });
+        ui.add_space(4.0);
+
+        ui.label("Target host:");
+        ui.text_edit_singleline(&mut self.config_target);
+        ui.add_space(4.0);
+
+        ui.label("Timeout (ms):");
+        ui.add(egui::DragValue::new(&mut self.config_timeout).range(100..=30000).speed(50).suffix(" ms"));
+        ui.add_space(4.0);
+
+        ui.label("Report interval (s):");
+        ui.add(egui::DragValue::new(&mut self.config_interval).range(5..=3600).speed(1).suffix(" s"));
+        ui.add_space(4.0);
+
+        ui.label("Ping frequency (ms):");
+        ui.add(egui::DragValue::new(&mut self.config_ping_freq).range(100..=10000).speed(50).suffix(" ms"));
+        ui.add_space(8.0);
+
+        if ui.button("✅ Apply Config").clicked() {
+            self.apply_config();
+        }
+    }
+
+    fn render_gateway_section(&mut self, ui: &mut egui::Ui) {
+        ui.heading("🌐 Gateway");
+        let (gateway_ip, gateway_enabled) = {
+            let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+            (shared.gateway_ip.clone(), shared.gateway_enabled)
+        };
+
+        match &gateway_ip {
+            Some(ip) => { ui.label(format!("Detected: {}", ip)); }
+            None => { ui.label("Not detected"); }
+        }
+
+        ui.horizontal(|ui| {
+            if ui.button("🔍 Detect").clicked() {
+                if let Some(ip) = pinger::detect_gateway() {
+                    let mut shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+                    shared.gateway_ip = Some(ip);
+                }
+            }
+            let mut enabled = gateway_enabled;
+            if ui.checkbox(&mut enabled, "Monitor").changed() {
+                let mut shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+                shared.gateway_enabled = enabled;
+            }
+        });
+    }
+
+    fn render_start_stop(&mut self, ui: &mut egui::Ui) {
+        let running = {
+            let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+            shared.running
+        };
+
+        if running {
+            if ui.button("⏹ Stop").clicked() {
+                self.state.lock().unwrap_or_else(|err| err.into_inner()).running = false;
+            }
+            ui.colored_label(egui::Color32::from_rgb(100, 255, 100), "● RUNNING");
+        } else {
+            if ui.button("▶ Start").clicked() {
+                self.state.lock().unwrap_or_else(|err| err.into_inner()).running = true;
+            }
+            ui.colored_label(egui::Color32::from_rgb(255, 100, 100), "● STOPPED");
+        }
+    }
+
+    fn render_quick_stats(&self, ui: &mut egui::Ui) {
+        let (sent, recv, loss) = {
+            let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+            (shared.total_sent, shared.total_received, shared.packet_loss_pct())
+        };
+        ui.label(format!("Sent: {}", sent));
+        ui.label(format!("Received: {}", recv));
+        ui.label(format!("Loss: {:.1}%", loss));
+    }
+
+    fn render_export_section(&mut self, ui: &mut egui::Ui) {
+        ui.heading("📥 Export");
+        ui.horizontal(|ui| {
+            if ui.button("CSV").clicked() { self.do_export_csv(); }
+            if ui.button("JSON").clicked() { self.do_export_json(); }
+        });
+
+        let message = {
+            let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+            shared.export_message.clone()
+        };
+        if let Some((text, when)) = message {
+            if when.elapsed().as_secs() < 5 {
+                ui.colored_label(egui::Color32::from_rgb(150, 200, 150), &text);
+            }
+        }
+    }
+
     fn render_main(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            // Tab bar at the top
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, Tab::Monitor, "📊 Monitor");
                 ui.selectable_value(&mut self.active_tab, Tab::Console, "🖥 Console");
@@ -144,148 +205,21 @@ impl NetworkMonitorApp {
             ui.separator();
 
             match self.active_tab {
-                Tab::Monitor => self.render_monitor(ui),
+                Tab::Monitor => {
+                    let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+                    monitor::render(ui, &shared);
+                }
                 Tab::Console => self.render_console(ui),
             }
         });
     }
 
-    /// Render the Monitor tab: stat cards, latency chart, and interval reports table.
-    /// Holds a read lock for the duration of rendering to get a consistent snapshot.
-    fn render_monitor(&mut self, ui: &mut egui::Ui) {
-        let s = self.state.read().unwrap_or_else(|e| e.into_inner());
-
-        // --- Stat Cards Row ---
-        // Displays key metrics as colored cards with adaptive coloring
-        ui.horizontal_wrapped(|ui| {
-            let loss = s.packet_loss_pct();
-            let avg = s.avg_latency();
-            let min_lat = s.min_latency();
-            let max_lat = s.max_latency();
-
-            stat_card(ui, "Packet Loss", &format!("{:.1}%", loss), loss_color(loss));
-            stat_card(
-                ui,
-                "Avg Latency",
-                &format!("{:.1} ms", avg),
-                latency_color(avg),
-            );
-            stat_card(
-                ui,
-                "Min Latency",
-                &format!("{:.1} ms", if min_lat == f64::MAX { 0.0 } else { min_lat }),
-                egui::Color32::from_rgb(150, 200, 255),
-            );
-            stat_card(
-                ui,
-                "Max Latency",
-                &format!("{:.1} ms", max_lat),
-                latency_color(max_lat),
-            );
-
-            // Overall connection quality verdict based on loss and latency thresholds
-            let (verdict, color) = if s.total_sent == 0 {
-                ("No data", egui::Color32::GRAY)
-            } else if loss < 1.0 && avg < 50.0 {
-                ("Excellent", egui::Color32::from_rgb(0, 255, 100))
-            } else if loss < 5.0 && avg < 100.0 {
-                ("Good", egui::Color32::from_rgb(150, 255, 50))
-            } else if loss < 15.0 {
-                ("Fair", egui::Color32::from_rgb(255, 200, 50))
-            } else {
-                ("Poor", egui::Color32::from_rgb(255, 80, 80))
-            };
-            stat_card(ui, "Connection", verdict, color);
-        });
-
-        ui.add_space(8.0);
-
-        // --- Latency Over Time Chart ---
-        // Plots all recorded latencies as a line chart using egui_plot.
-        // X-axis is the sample index, Y-axis is latency in milliseconds.
-        ui.heading("Latency Over Time");
-        let latencies: Vec<[f64; 2]> = s
-            .all_latencies
-            .iter()
-            .enumerate()
-            .map(|(i, &lat)| [i as f64, lat])
-            .collect();
-
-        let line = Line::new(PlotPoints::new(latencies))
-            .color(egui::Color32::from_rgb(100, 200, 255))
-            .name("Latency (ms)");
-
-        Plot::new("latency_plot")
-            .height(180.0)
-            .allow_drag(false)
-            .allow_zoom(false)
-            .show_axes(true)
-            .y_axis_label("ms")
-            .show(ui, |plot_ui| {
-                plot_ui.line(line);
-            });
-
-        ui.add_space(8.0);
-
-        // --- Interval Reports Table ---
-        // Shows periodic summaries (e.g. every 60s) in a scrollable striped grid.
-        // Most recent reports appear at the top (reverse iteration).
-        if !s.interval_reports.is_empty() {
-            ui.heading("Interval Reports");
-            egui::ScrollArea::vertical()
-                .max_height(200.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("reports_grid")
-                        .striped(true)
-                        .min_col_width(60.0)
-                        .show(ui, |ui| {
-                            // Table header
-                            ui.strong("Time");
-                            ui.strong("Pings");
-                            ui.strong("OK");
-                            ui.strong("Fail");
-                            ui.strong("Loss%");
-                            ui.strong("Avg ms");
-                            ui.strong("Min ms");
-                            ui.strong("Max ms");
-                            ui.end_row();
-
-                            // Table rows — newest first
-                            for report in s.interval_reports.iter().rev() {
-                                ui.label(format!(
-                                    "{}-{}",
-                                    report.start_time.format("%H:%M:%S"),
-                                    report.end_time.format("%H:%M:%S")
-                                ));
-                                ui.label(report.total_pings.to_string());
-                                ui.label(report.successful.to_string());
-                                ui.label(report.failed.to_string());
-                                ui.colored_label(
-                                    loss_color(report.packet_loss_pct),
-                                    format!("{:.1}", report.packet_loss_pct),
-                                );
-                                ui.label(format!("{:.1}", report.avg_latency_ms));
-                                ui.label(format!("{:.1}", report.min_latency_ms));
-                                ui.label(format!("{:.1}", report.max_latency_ms));
-                                ui.end_row();
-                            }
-                        });
-                });
-        }
-    }
-
-    /// Render the Console tab: a scrolling log of individual ping results.
-    ///
-    /// Log entries are cloned out of the lock into a local Vec to minimize
-    /// lock hold time. Color-coded: green for success, red for timeouts.
     fn render_console(&mut self, ui: &mut egui::Ui) {
-        // Toolbar: auto-scroll toggle and live/stopped indicator
         ui.horizontal(|ui| {
             ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
-
             let running = {
-                let s = self.state.read().unwrap_or_else(|e| e.into_inner());
-                s.running
+                let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+                shared.running
             };
             if running {
                 ui.colored_label(egui::Color32::from_rgb(100, 255, 100), "🟢 LIVE");
@@ -295,31 +229,17 @@ impl NetworkMonitorApp {
         });
         ui.separator();
 
-        // Clone log entries out of the lock to avoid holding it during rendering
-        let log_entries: Vec<(String, String)> = {
-            let s = self.state.read().unwrap_or_else(|e| e.into_inner());
-            s.log_entries
-                .iter()
-                .map(|e| {
-                    let color_hint = e.message.clone();
-                    (e.message.clone(), color_hint)
-                })
-                .collect()
+        let log_messages: Vec<String> = {
+            let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+            shared.log_entries.iter().map(|entry| entry.message.clone()).collect()
         };
 
-        // Scrollable log area with optional stick-to-bottom behavior
         let scroll = egui::ScrollArea::vertical().auto_shrink([false; 2]);
-        let scroll = if self.auto_scroll {
-            scroll.stick_to_bottom(true)
-        } else {
-            scroll
-        };
+        let scroll = if self.auto_scroll { scroll.stick_to_bottom(true) } else { scroll };
 
         scroll.show(ui, |ui| {
-            // Use monospace font for aligned log output
             ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.0));
-            for (msg, _) in &log_entries {
-                // Red for failures, green for successful replies
+            for msg in &log_messages {
                 let color = if msg.contains("timed out") || msg.contains("unreachable") {
                     egui::Color32::from_rgb(255, 100, 100)
                 } else {
@@ -330,58 +250,42 @@ impl NetworkMonitorApp {
         });
     }
 
-    /// Push the sidebar config fields into shared state and signal
-    /// the pinger to reset its interval tracking.
     fn apply_config(&mut self) {
-        let timeout = self.config_timeout.parse::<u32>().unwrap_or(2000);
-        let interval = self.config_interval.parse::<u64>().unwrap_or(60);
-
-        let mut s = self.state.write().unwrap_or_else(|e| e.into_inner());
-        s.config = PingConfig {
+        let mut shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        shared.config = PingConfig {
             target: self.config_target.clone(),
-            timeout_ms: timeout,
-            interval_secs: interval,
+            timeout_ms: self.config_timeout,
+            interval_secs: self.config_interval,
+            ping_interval_ms: self.config_ping_freq.max(100),
         };
-        // Signal the pinger thread to reset interval accumulation
-        s.config_changed = true;
+        shared.config_changed = true;
     }
-}
 
-/// Render a compact stat card with a label and a large colored value.
-/// Used in the Monitor tab's stats row.
-fn stat_card(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
-    egui::Frame::new()
-        .inner_margin(egui::Margin::same(8))
-        .corner_radius(4.0)
-        .fill(egui::Color32::from_rgb(40, 40, 50))
-        .show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.small(label);
-                ui.colored_label(color, egui::RichText::new(value).size(18.0).strong());
-            });
-        });
-}
-
-/// Map packet loss percentage to a traffic-light color:
-/// green (<1%), yellow (1-5%), red (>5%)
-fn loss_color(loss: f64) -> egui::Color32 {
-    if loss < 1.0 {
-        egui::Color32::from_rgb(100, 255, 100)
-    } else if loss < 5.0 {
-        egui::Color32::from_rgb(255, 255, 100)
-    } else {
-        egui::Color32::from_rgb(255, 80, 80)
+    fn do_export_csv(&mut self) {
+        let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("network-monitor-{}.csv", timestamp);
+        let path = export::export_dir().join(&filename);
+        let result = export::write_csv(&path, &shared);
+        drop(shared);
+        self.set_export_message(&filename, result);
     }
-}
 
-/// Map latency to a traffic-light color:
-/// green (<30ms), yellow (30-100ms), red (>100ms)
-fn latency_color(ms: f64) -> egui::Color32 {
-    if ms < 30.0 {
-        egui::Color32::from_rgb(100, 255, 100)
-    } else if ms < 100.0 {
-        egui::Color32::from_rgb(255, 255, 100)
-    } else {
-        egui::Color32::from_rgb(255, 80, 80)
+    fn do_export_json(&mut self) {
+        let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("network-monitor-{}.json", timestamp);
+        let path = export::export_dir().join(&filename);
+        let result = export::write_json(&path, &shared);
+        drop(shared);
+        self.set_export_message(&filename, result);
+    }
+
+    fn set_export_message(&self, filename: &str, result: std::io::Result<()>) {
+        let mut shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        match result {
+            Ok(()) => shared.export_message = Some((format!("✅ Saved {}", filename), Instant::now())),
+            Err(err) => shared.export_message = Some((format!("❌ {}", err), Instant::now())),
+        }
     }
 }

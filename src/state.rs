@@ -1,14 +1,14 @@
 //! # Shared State Types
 //!
 //! Defines all data structures shared between the pinger thread and the GUI.
-//! Uses `RwLock` instead of `Mutex` because the GUI reads far more frequently
-//! than the pinger writes, allowing concurrent read access.
+//! Uses `Arc<Mutex>` for thread-safe shared state. Mutex is simpler and cheaper
+//! than RwLock at our low throughput (~2 reads/sec, ~1 write/sec).
 //!
 //! All collections are bounded using `VecDeque` with `pop_front()` eviction
 //! to prevent unbounded memory growth during long-running sessions.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// Maximum number of ping results to retain (at 1 ping/sec, ~2 hours of data)
@@ -17,6 +17,16 @@ pub const MAX_RESULTS: usize = 7200;
 pub const MAX_LOG_ENTRIES: usize = 2000;
 /// Maximum number of latency data points for the chart (matches MAX_RESULTS)
 pub const MAX_LATENCIES: usize = 7200;
+/// Maximum number of jitter data points to retain
+pub const MAX_JITTER: usize = 7200;
+
+/// Built-in target presets for quick selection
+pub const PRESETS: &[(&str, &str)] = &[
+    ("8.8.8.8", "Google DNS"),
+    ("1.1.1.1", "Cloudflare DNS"),
+    ("9.9.9.9", "Quad9 DNS"),
+    ("208.67.222.222", "OpenDNS"),
+];
 
 /// User-configurable ping parameters
 #[derive(Clone, Debug)]
@@ -27,6 +37,8 @@ pub struct PingConfig {
     pub timeout_ms: u32,
     /// How often (in seconds) to generate an interval summary report
     pub interval_secs: u64,
+    /// Milliseconds between consecutive pings (default 1000ms = 1 ping/sec)
+    pub ping_interval_ms: u64,
 }
 
 impl Default for PingConfig {
@@ -35,6 +47,7 @@ impl Default for PingConfig {
             target: "8.8.8.8".to_string(),
             timeout_ms: 2000,
             interval_secs: 60,
+            ping_interval_ms: 1000,
         }
     }
 }
@@ -77,7 +90,7 @@ pub struct IntervalReport {
 
 /// Central shared state accessed by both the pinger thread (writer) and the GUI (reader).
 ///
-/// All mutable access goes through `RwLock` — the pinger acquires a write lock
+/// All mutable access goes through `Mutex` — the pinger acquires the lock
 /// once per ping, while the GUI acquires read locks every frame (~500ms).
 pub struct PingState {
     /// Current ping configuration (target, timeout, interval)
@@ -106,6 +119,30 @@ pub struct PingState {
     pub interval_results: Vec<PingResult>,
     /// Flag set by the GUI when config is updated; pinger resets interval tracking
     pub config_changed: bool,
+
+    // --- Jitter tracking ---
+    /// Previous ping's latency, used to compute jitter (|current - previous|)
+    pub last_latency: Option<f64>,
+    /// Bounded ring buffer of jitter values for display/charting
+    pub jitter_values: VecDeque<f64>,
+
+    // --- Gateway / LAN health check ---
+    /// Auto-detected or manually set default gateway IP
+    pub gateway_ip: Option<String>,
+    /// Whether gateway pinging is enabled
+    pub gateway_enabled: bool,
+    /// Gateway ping stats — sent count
+    pub gw_total_sent: u64,
+    /// Gateway ping stats — received count
+    pub gw_total_received: u64,
+    /// Gateway latency values for stats
+    pub gw_all_latencies: VecDeque<f64>,
+    /// Gateway jitter tracking
+    pub gw_last_latency: Option<f64>,
+    pub gw_jitter_values: VecDeque<f64>,
+
+    // --- Export status message ---
+    pub export_message: Option<(String, Instant)>,
 }
 
 impl PingState {
@@ -125,24 +162,65 @@ impl PingState {
             interval_start_time: None,
             interval_results: Vec::new(),
             config_changed: false,
+            last_latency: None,
+            jitter_values: VecDeque::with_capacity(MAX_JITTER),
+            gateway_ip: None,
+            gateway_enabled: false,
+            gw_total_sent: 0,
+            gw_total_received: 0,
+            gw_all_latencies: VecDeque::with_capacity(MAX_LATENCIES),
+            gw_last_latency: None,
+            gw_jitter_values: VecDeque::with_capacity(MAX_JITTER),
+            export_message: None,
         }
     }
 
     /// Record a ping result. Evicts the oldest entry if the collection is at capacity.
-    /// Also tracks the latency separately for chart rendering.
+    /// Also tracks the latency and jitter separately.
     pub fn push_result(&mut self, result: PingResult) {
-        // Track latency in a separate bounded deque for efficient chart rendering
         if let Some(lat) = result.latency_ms {
+            // Compute jitter: absolute difference between consecutive latencies
+            if let Some(prev) = self.last_latency {
+                let jitter = (lat - prev).abs();
+                if self.jitter_values.len() >= MAX_JITTER {
+                    self.jitter_values.pop_front();
+                }
+                self.jitter_values.push_back(jitter);
+            }
+            self.last_latency = Some(lat);
+
             if self.all_latencies.len() >= MAX_LATENCIES {
                 self.all_latencies.pop_front();
             }
             self.all_latencies.push_back(lat);
         }
-        // Evict oldest result if at capacity
         if self.results.len() >= MAX_RESULTS {
             self.results.pop_front();
         }
         self.results.push_back(result);
+    }
+
+    /// Record a gateway ping result. Tracks gateway-specific latency and jitter.
+    pub fn push_gateway_result(&mut self, latency_ms: Option<f64>, success: bool) {
+        self.gw_total_sent += 1;
+        if success {
+            self.gw_total_received += 1;
+        }
+        if let Some(lat) = latency_ms {
+            if let Some(prev) = self.gw_last_latency {
+                let jitter = (lat - prev).abs();
+                if self.gw_jitter_values.len() >= MAX_JITTER {
+                    self.gw_jitter_values.pop_front();
+                }
+                self.gw_jitter_values.push_back(jitter);
+            }
+            self.gw_last_latency = Some(lat);
+
+            if self.gw_all_latencies.len() >= MAX_LATENCIES {
+                self.gw_all_latencies.pop_front();
+            }
+            self.gw_all_latencies.push_back(lat);
+        }
     }
 
     /// Append a message to the console log. Evicts the oldest entry if at capacity.
@@ -190,12 +268,48 @@ impl PingState {
             .cloned()
             .fold(0.0_f64, f64::max)
     }
+
+    /// Average jitter (mean of absolute latency differences between consecutive pings)
+    pub fn avg_jitter(&self) -> f64 {
+        if self.jitter_values.is_empty() {
+            return 0.0;
+        }
+        let sum: f64 = self.jitter_values.iter().sum();
+        sum / self.jitter_values.len() as f64
+    }
+
+    /// Gateway packet loss percentage
+    pub fn gw_packet_loss_pct(&self) -> f64 {
+        if self.gw_total_sent == 0 {
+            return 0.0;
+        }
+        let lost = self.gw_total_sent - self.gw_total_received;
+        (lost as f64 / self.gw_total_sent as f64) * 100.0
+    }
+
+    /// Gateway average latency
+    pub fn gw_avg_latency(&self) -> f64 {
+        if self.gw_all_latencies.is_empty() {
+            return 0.0;
+        }
+        let sum: f64 = self.gw_all_latencies.iter().sum();
+        sum / self.gw_all_latencies.len() as f64
+    }
+
+    /// Gateway average jitter
+    pub fn gw_avg_jitter(&self) -> f64 {
+        if self.gw_jitter_values.is_empty() {
+            return 0.0;
+        }
+        let sum: f64 = self.gw_jitter_values.iter().sum();
+        sum / self.gw_jitter_values.len() as f64
+    }
 }
 
-/// Thread-safe shared state handle. Uses `RwLock` for concurrent read access.
-pub type SharedState = Arc<RwLock<PingState>>;
+/// Thread-safe shared state handle.
+pub type SharedState = Arc<Mutex<PingState>>;
 
-/// Create a new shared state wrapped in Arc<RwLock<>> for cross-thread access
+/// Create a new shared state wrapped in Arc<Mutex<>> for cross-thread access
 pub fn new_shared_state(config: PingConfig) -> SharedState {
-    Arc::new(RwLock::new(PingState::new(config)))
+    Arc::new(Mutex::new(PingState::new(config)))
 }
