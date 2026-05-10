@@ -90,7 +90,7 @@ The release build is optimized for size:
 ### 📈 Chart & UX Improvements
 - [ ] **Time range selector** — Zoom into last 1m / 5m / 15m / 30m / custom range on the latency graph
 - [ ] **Draggable time window** — Click and drag to select a section of the chart and view stats for just that period
-- [ ] **Hover tooltips** — Show exact latency, timestamp, and sequence number when hovering over graph points
+- [x] **Hover tooltips** — Show exact latency, timestamp, and timeout status when hovering over graph points
 - [ ] **Min/Max/Avg overlay lines** — Toggle horizontal reference lines on the chart for quick visual comparison
 - [ ] **Latency distribution histogram** — Separate view showing how latency values are distributed
 - [ ] **Jitter graph** — Plot latency variance (difference between consecutive pings) alongside the latency graph

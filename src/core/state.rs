@@ -45,7 +45,7 @@ pub struct PingConfig {
 
 impl PingConfig {
     /// Create a PingConfig from a saved config loaded from disk
-    pub fn from_saved(saved: &crate::config::SavedConfig) -> Self {
+    pub fn from_saved(saved: &crate::core::config::SavedConfig) -> Self {
         Self {
             target: saved.target.clone(),
             timeout_ms: saved.timeout_ms,
@@ -148,9 +148,6 @@ pub struct PingState {
     /// Gateway jitter tracking
     pub gw_last_latency: Option<f64>,
     pub gw_jitter_values: VecDeque<f64>,
-
-    // --- Export status message ---
-    pub export_message: Option<(String, Instant)>,
 }
 
 impl PingState {
@@ -180,7 +177,6 @@ impl PingState {
             gw_all_latencies: VecDeque::with_capacity(MAX_LATENCIES),
             gw_last_latency: None,
             gw_jitter_values: VecDeque::with_capacity(MAX_JITTER),
-            export_message: None,
         }
     }
 

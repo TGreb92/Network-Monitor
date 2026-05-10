@@ -6,8 +6,8 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 
-use crate::state::PingState;
-use crate::ui_helpers::{stat_card, loss_color, latency_color, jitter_color};
+use crate::core::state::PingState;
+use crate::ui::helpers::{stat_card, loss_color, latency_color, jitter_color};
 
 /// Render the full Monitor tab contents
 pub fn render(ui: &mut egui::Ui, state: &PingState) {

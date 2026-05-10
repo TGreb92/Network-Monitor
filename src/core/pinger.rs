@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::state::{IntervalReport, PingResult, SharedState};
+use crate::core::state::{IntervalReport, PingResult, SharedState};
 
 /// Windows process creation flag that prevents a console window from being created.
 /// Without this, every `ping.exe` invocation would flash a CMD window.

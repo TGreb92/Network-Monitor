@@ -4,7 +4,7 @@
 
 use std::io::Write;
 
-use crate::state::PingState;
+use crate::core::state::PingState;
 
 /// Get the directory to write export files to (same directory as the executable)
 pub fn export_dir() -> std::path::PathBuf {
