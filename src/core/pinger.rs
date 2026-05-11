@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::core::state::{IntervalReport, PingResult, SharedState};
+use crate::core::state::{PingResult, SharedState};
 
 /// Windows process creation flag that prevents a console window from being created.
 /// Without this, every `ping.exe` invocation would flash a CMD window.
@@ -67,12 +67,19 @@ pub fn detect_gateway() -> Option<String> {
 /// Main pinger loop. Runs indefinitely, checking the `running` flag each iteration.
 fn pinger_loop(state: SharedState) {
     loop {
-        let config_snapshot = read_config_snapshot(&state);
+        // Quick check: only read running flag (no String clone)
+        let running = {
+            let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            shared.running
+        };
 
-        if !config_snapshot.running {
+        if !running {
             thread::sleep(Duration::from_millis(200));
             continue;
         }
+
+        // Full config read (clones target String) only when running
+        let config_snapshot = read_config_snapshot(&state);
 
         if check_and_stop_if_duration_exceeded(&state, config_snapshot.duration_secs) {
             continue;
@@ -99,7 +106,6 @@ struct ConfigSnapshot {
     interval_secs: u64,
     ping_interval_ms: u64,
     duration_secs: u64,
-    running: bool,
 }
 
 fn read_config_snapshot(state: &SharedState) -> ConfigSnapshot {
@@ -110,7 +116,6 @@ fn read_config_snapshot(state: &SharedState) -> ConfigSnapshot {
         interval_secs: shared.config.interval_secs,
         ping_interval_ms: shared.config.ping_interval_ms,
         duration_secs: shared.config.duration_secs,
-        running: shared.running,
     }
 }
 
@@ -147,9 +152,9 @@ fn record_ping_result(
     let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
 
     if shared.config_changed {
-        shared.interval_start = None;
-        shared.interval_start_time = None;
-        shared.interval_results.clear();
+        shared.interval.start = None;
+        shared.interval.start_time = None;
+        shared.interval.results.clear();
         shared.config_changed = false;
     }
 
@@ -197,26 +202,26 @@ fn accumulate_interval(
     now: chrono::NaiveDateTime,
     interval_secs: u64,
 ) {
-    if shared.interval_start.is_none() {
-        shared.interval_start = Some(Instant::now());
-        shared.interval_start_time = Some(now);
+    if shared.interval.start.is_none() {
+        shared.interval.start = Some(Instant::now());
+        shared.interval.start_time = Some(now);
     }
-    shared.interval_results.push(result);
+    shared.interval.results.push(result);
 
-    if let Some(start) = shared.interval_start {
+    if let Some(start) = shared.interval.start {
         if start.elapsed() >= Duration::from_secs(interval_secs) {
-            let report = generate_report(
-                &shared.interval_results,
-                shared.interval_start_time.unwrap_or(now),
+            let report = crate::core::state::build_interval_report(
+                &shared.interval.results,
+                shared.interval.start_time.unwrap_or(now),
                 now,
             );
             shared.interval_reports.push_back(report);
             if shared.interval_reports.len() > 256 {
                 shared.interval_reports.pop_front();
             }
-            shared.interval_results.clear();
-            shared.interval_start = Some(Instant::now());
-            shared.interval_start_time = Some(now);
+            shared.interval.results.clear();
+            shared.interval.start = Some(Instant::now());
+            shared.interval.start_time = Some(now);
         }
     }
 }
@@ -237,11 +242,11 @@ fn gateway_pinger_loop(state: SharedState) {
         let (gateway_ip, timeout_ms, ping_interval_ms, running, enabled) = {
             let shared = state.lock().unwrap_or_else(|err| err.into_inner());
             (
-                shared.gateway_ip.clone(),
+                shared.gateway.ip.clone(),
                 shared.config.timeout_ms,
                 shared.config.ping_interval_ms,
                 shared.running,
-                shared.gateway_enabled,
+                shared.gateway.enabled,
             )
         };
 
@@ -256,7 +261,7 @@ fn gateway_pinger_loop(state: SharedState) {
 
         {
             let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
-            shared.push_gateway_result(latency_ms, success);
+            shared.gateway.push_result(latency_ms, success);
         }
 
         let interval = Duration::from_millis(ping_interval_ms);
@@ -325,42 +330,4 @@ fn parse_latency(output: &str) -> Option<f64> {
         }
     }
     None
-}
-
-/// Generate a summary report for a completed interval.
-fn generate_report(
-    results: &[PingResult],
-    start_time: chrono::NaiveDateTime,
-    end_time: chrono::NaiveDateTime,
-) -> IntervalReport {
-    let total = results.len() as u64;
-    let successful = results.iter().filter(|result| result.success).count() as u64;
-    let failed = total - successful;
-    let packet_loss_pct = if total > 0 {
-        (failed as f64 / total as f64) * 100.0
-    } else {
-        0.0
-    };
-
-    let latencies: Vec<f64> = results.iter().filter_map(|result| result.latency_ms).collect();
-    let avg = if latencies.is_empty() {
-        0.0
-    } else {
-        latencies.iter().sum::<f64>() / latencies.len() as f64
-    };
-    let min = latencies.iter().cloned().fold(f64::MAX, f64::min);
-    let max = latencies.iter().cloned().fold(0.0_f64, f64::max);
-
-    IntervalReport {
-        start_time,
-        end_time,
-        total_pings: total,
-        successful,
-        failed,
-        packet_loss_pct,
-        avg_latency_ms: avg,
-        min_latency_ms: if min == f64::MAX { 0.0 } else { min },
-        max_latency_ms: max,
-        loss_events: crate::core::state::count_loss_events(results),
-    }
 }

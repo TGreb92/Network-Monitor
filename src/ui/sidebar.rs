@@ -35,19 +35,48 @@ impl SidebarState {
     }
 }
 
+/// Snapshot of all shared state values needed by the sidebar (read in one lock)
+struct SidebarSnapshot {
+    running: bool,
+    elapsed_display: String,
+    elapsed_secs: f64,
+    duration_secs: u64,
+    gateway_ip: Option<String>,
+    total_sent: u64,
+    total_received: u64,
+    loss_pct: f64,
+    loss_batches: u64,
+}
+
+fn read_sidebar_snapshot(state: &SharedState) -> SidebarSnapshot {
+    let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    SidebarSnapshot {
+        running: shared.running,
+        elapsed_display: shared.elapsed_display(),
+        elapsed_secs: shared.elapsed_secs(),
+        duration_secs: shared.config.duration_secs,
+        gateway_ip: shared.gateway.ip.clone(),
+        total_sent: shared.total_sent,
+        total_received: shared.total_received,
+        loss_pct: shared.packet_loss_pct(),
+        loss_batches: shared.loss_tracker.count,
+    }
+}
+
 /// Render the full sidebar panel
 pub fn render(ctx: &egui::Context, state: &SharedState, sidebar: &mut SidebarState) {
+    let snapshot = read_sidebar_snapshot(state);
     egui::SidePanel::left("control_panel")
         .resizable(true)
         .default_width(180.0)
         .show(ctx, |ui| {
             render_target_selector(ui, state, sidebar);
             ui.separator();
-            render_start_stop(ui, state, sidebar);
+            render_start_stop(ui, state, sidebar, &snapshot);
             ui.separator();
-            render_gateway(ui, state);
+            render_gateway(ui, state, &snapshot);
             ui.separator();
-            render_quick_stats(ui, state);
+            render_quick_stats(ui, &snapshot);
             ui.separator();
             render_export(ui, state, sidebar);
         });
@@ -88,15 +117,10 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
     }
 }
 
-fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &SidebarState) {
-    let (running, elapsed_display, duration_secs, elapsed_secs) = {
-        let shared = state.lock().unwrap_or_else(|err| err.into_inner());
-        (shared.running, shared.elapsed_display(), shared.config.duration_secs, shared.elapsed_secs())
-    };
-
+fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &SidebarState, snap: &SidebarSnapshot) {
     let button_size = egui::vec2(ui.available_width(), 32.0);
 
-    if running {
+    if snap.running {
         let btn = egui::Button::new(
             egui::RichText::new("⏹ Stop").size(16.0).strong()
         ).min_size(button_size);
@@ -106,15 +130,13 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &SidebarSt
             shared.running = false;
         }
         ui.colored_label(egui::Color32::from_rgb(100, 255, 100), "● RUNNING");
-        ui.label(format!("⏱ Elapsed: {}", elapsed_display));
+        ui.label(format!("⏱ Elapsed: {}", snap.elapsed_display));
 
-        if duration_secs > 0 {
-            let progress = (elapsed_secs / duration_secs as f64).min(1.0);
-            let remaining_secs = (duration_secs as f64 - elapsed_secs).max(0.0) as u64;
-            let remaining_mins = remaining_secs / 60;
-            let remaining_sec = remaining_secs % 60;
+        if snap.duration_secs > 0 {
+            let progress = (snap.elapsed_secs / snap.duration_secs as f64).min(1.0);
+            let remaining_secs = (snap.duration_secs as f64 - snap.elapsed_secs).max(0.0) as u64;
             ui.add(egui::ProgressBar::new(progress as f32)
-                .text(format!("{}m {}s remaining", remaining_mins, remaining_sec)));
+                .text(format!("{}m {}s remaining", remaining_secs / 60, remaining_secs % 60)));
         }
     } else {
         let btn = egui::Button::new(
@@ -122,7 +144,6 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &SidebarSt
         ).min_size(button_size);
         if ui.add(btn).clicked() {
             let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
-            // Set target from current preset selection
             shared.config.target = sidebar.selected_host();
             shared.reset_data();
             shared.running = true;
@@ -131,14 +152,10 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &SidebarSt
     }
 }
 
-fn render_gateway(ui: &mut egui::Ui, state: &SharedState) {
+fn render_gateway(ui: &mut egui::Ui, state: &SharedState, snap: &SidebarSnapshot) {
     ui.heading("🌐 Gateway");
-    let gateway_ip = {
-        let shared = state.lock().unwrap_or_else(|err| err.into_inner());
-        shared.gateway_ip.clone()
-    };
 
-    match &gateway_ip {
+    match &snap.gateway_ip {
         Some(ip) => { ui.label(format!("Detected: {}", ip)); }
         None => { ui.label("Not detected"); }
     }
@@ -146,27 +163,18 @@ fn render_gateway(ui: &mut egui::Ui, state: &SharedState) {
     if ui.button("🔍 Detect").clicked() {
         if let Some(ip) = pinger::detect_gateway() {
             let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
-            shared.gateway_ip = Some(ip);
+            shared.gateway.ip = Some(ip);
         }
     }
 }
 
-fn render_quick_stats(ui: &mut egui::Ui, state: &SharedState) {
-    let (sent, recv, lost, loss, loss_batches) = {
-        let shared = state.lock().unwrap_or_else(|err| err.into_inner());
-        (
-            shared.total_sent,
-            shared.total_received,
-            shared.total_sent - shared.total_received,
-            shared.packet_loss_pct(),
-            shared.loss_batches,
-        )
-    };
-    ui.label(format!("Sent: {}", sent));
-    ui.label(format!("Received: {}", recv));
-    ui.label(format!("Loss: {:.1}%", loss));
+fn render_quick_stats(ui: &mut egui::Ui, snap: &SidebarSnapshot) {
+    let lost = snap.total_sent - snap.total_received;
+    ui.label(format!("Sent: {}", snap.total_sent));
+    ui.label(format!("Received: {}", snap.total_received));
+    ui.label(format!("Loss: {:.1}%", snap.loss_pct));
     ui.label(format!("Lost: {}", lost));
-    ui.label(format!("Loss events: {}", loss_batches));
+    ui.label(format!("Loss events: {}", snap.loss_batches));
 }
 
 fn render_export(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarState) {

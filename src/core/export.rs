@@ -52,7 +52,7 @@ pub fn write_json(path: &std::path::Path, state: &PingState) -> std::io::Result<
     writeln!(file, "    \"avg_latency_ms\": {:.1},", state.avg_latency())?;
     writeln!(file, "    \"min_latency_ms\": {:.1},", if min == f64::MAX { 0.0 } else { min })?;
     writeln!(file, "    \"max_latency_ms\": {:.1},", state.max_latency())?;
-    writeln!(file, "    \"avg_jitter_ms\": {:.1}", state.avg_jitter())?;
+    writeln!(file, "    \"avg_jitter_ms\": {:.1}", state.jitter.avg())?;
     writeln!(file, "  }},")?;
 
     write_json_results(&mut file, state)?;

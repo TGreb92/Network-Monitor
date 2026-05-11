@@ -38,11 +38,11 @@ impl NetworkMonitorApp {
         {
             let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
             shared.config = PingConfig::from_saved(&saved);
-            shared.gateway_enabled = saved.gateway_enabled;
+            shared.gateway.enabled = saved.gateway_enabled;
 
             if saved.auto_detect_gateway {
                 if let Some(ip) = pinger::detect_gateway() {
-                    shared.gateway_ip = Some(ip);
+                    shared.gateway.ip = Some(ip);
                 }
             }
         }

@@ -9,4 +9,5 @@ pub mod console;
 pub mod help;
 pub mod helpers;
 pub mod monitor;
+pub mod presets;
 pub mod sidebar;

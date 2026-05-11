@@ -33,7 +33,7 @@ impl MonitorState {
 pub fn render(ui: &mut egui::Ui, state: &PingState, monitor: &mut MonitorState) {
     render_external_stats(ui, state);
 
-    if state.gateway_enabled && state.gateway_ip.is_some() {
+    if state.gateway.enabled && state.gateway.ip.is_some() {
         render_gateway_stats(ui, state);
     }
 
@@ -50,7 +50,7 @@ fn render_external_stats(ui: &mut egui::Ui, state: &PingState) {
         let avg = state.avg_latency();
         let min_lat = state.min_latency();
         let max_lat = state.max_latency();
-        let jitter = state.avg_jitter();
+        let jitter = state.jitter.avg();
 
         stat_card(ui, "Packet Loss", &format!("{:.1}%", loss), loss_color(loss));
         stat_card(ui, "Avg Latency", &format!("{:.1} ms", avg), latency_color(avg));
@@ -70,19 +70,19 @@ fn render_external_stats(ui: &mut egui::Ui, state: &PingState) {
 /// Gateway stats row with local-vs-ISP diagnosis
 fn render_gateway_stats(ui: &mut egui::Ui, state: &PingState) {
     ui.add_space(4.0);
-    let gw_ip = state.gateway_ip.as_deref().unwrap_or("?");
+    let gw_ip = state.gateway.ip.as_deref().unwrap_or("?");
     ui.heading(format!("🌐 Gateway: {}", gw_ip));
     ui.horizontal_wrapped(|ui| {
-        let gw_loss = state.gw_packet_loss_pct();
-        let gw_avg = state.gw_avg_latency();
-        let gw_jitter = state.gw_avg_jitter();
+        let gw_loss = state.gateway.packet_loss_pct();
+        let gw_avg = state.gateway.avg_latency();
+        let gw_jitter = state.gateway.jitter.avg();
         let ext_loss = state.packet_loss_pct();
 
         stat_card(ui, "GW Loss", &format!("{:.1}%", gw_loss), loss_color(gw_loss));
         stat_card(ui, "GW Avg", &format!("{:.1} ms", gw_avg), latency_color(gw_avg));
         stat_card(ui, "GW Jitter", &format!("{:.1} ms", gw_jitter), jitter_color(gw_jitter));
 
-        let (diag, color) = network_diagnosis(state.gw_total_sent, state.total_sent, gw_loss, ext_loss);
+        let (diag, color) = network_diagnosis(state.gateway.total_sent, state.total_sent, gw_loss, ext_loss);
         stat_card(ui, "Diagnosis", diag, color);
     });
 }
@@ -98,7 +98,7 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
     let (ext_line, timeout_markers) = build_external_chart_data(state, min_time);
     let gw_line = build_gateway_chart_data(state, window_secs);
     let visible_results = build_tooltip_data(state, min_time);
-    let show_gateway = state.gateway_enabled && state.gateway_ip.is_some();
+    let show_gateway = state.gateway.enabled && state.gateway.ip.is_some();
 
     let x_fmt = |mark: egui_plot::GridMark, _range: &std::ops::RangeInclusive<f64>| {
         let total_secs = mark.value as u64;
@@ -171,14 +171,14 @@ fn build_external_chart_data(state: &PingState, min_time: f64) -> (Line<'_>, egu
 /// Build gateway chart data, showing only the last `window_secs` worth of points.
 /// Gateway latencies don't have timestamps, so we estimate based on count.
 fn build_gateway_chart_data(state: &PingState, window_secs: f64) -> Line<'_> {
-    let total = state.gw_all_latencies.len();
+    let total = state.gateway.all_latencies.len();
     let skip_count = if window_secs > 0.0 && total > window_secs as usize {
         total - window_secs as usize
     } else {
         0
     };
 
-    let points: Vec<[f64; 2]> = state.gw_all_latencies
+    let points: Vec<[f64; 2]> = state.gateway.all_latencies
         .iter()
         .enumerate()
         .skip(skip_count)

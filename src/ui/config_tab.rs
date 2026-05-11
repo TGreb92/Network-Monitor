@@ -1,13 +1,14 @@
 //! # Config Tab — Settings with TOML persistence
 //!
-//! Preset management (add/edit/delete), ping parameters, gateway settings.
-//! Saves to and loads from network-monitor.toml.
+//! Ping parameters, gateway settings, and duration.
+//! Preset management is in `presets.rs`.
 
 use eframe::egui;
 use std::time::Instant;
 
-use crate::core::config::{self, SavedConfig, TargetPreset, default_presets};
+use crate::core::config::{self, SavedConfig, default_presets};
 use crate::core::state::{PingConfig, SharedState};
+use crate::ui::presets::{self, PresetEditorState};
 use crate::ui::sidebar::SidebarState;
 
 /// Config tab local state
@@ -19,11 +20,7 @@ pub struct ConfigState {
     pub auto_detect_gateway: bool,
     pub duration_mins: u64,
     pub status: Option<(String, Instant)>,
-    // Preset editor fields
-    pub edit_name: String,
-    pub edit_host: String,
-    pub editing_index: Option<usize>,
-    pub show_add_form: bool,
+    pub preset_editor: PresetEditorState,
 }
 
 impl ConfigState {
@@ -36,10 +33,7 @@ impl ConfigState {
             auto_detect_gateway: saved.auto_detect_gateway,
             duration_mins: saved.duration_mins,
             status: None,
-            edit_name: String::new(),
-            edit_host: String::new(),
-            editing_index: None,
-            show_add_form: false,
+            preset_editor: PresetEditorState::new(),
         }
     }
 }
@@ -49,7 +43,7 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
     ui.heading("⚙ Configuration");
     ui.add_space(8.0);
 
-    render_preset_manager(ui, cfg, sidebar);
+    presets::render(ui, &mut cfg.preset_editor, sidebar);
     ui.add_space(12.0);
     ui.separator();
     ui.add_space(8.0);
@@ -57,120 +51,6 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
     ui.add_space(12.0);
     render_buttons(ui, state, cfg, sidebar);
     render_status(ui, cfg);
-}
-
-fn render_preset_manager(ui: &mut egui::Ui, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
-    let header_id = ui.make_persistent_id("presets_collapsible");
-    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), header_id, false)
-        .show_header(ui, |ui| {
-            ui.heading("🎯 Target Presets");
-            ui.label(format!("({})", sidebar.presets.len()));
-        })
-        .body(|ui| {
-            render_preset_list(ui, cfg, sidebar);
-            ui.add_space(4.0);
-            render_preset_form(ui, cfg, sidebar);
-        });
-}
-
-fn render_preset_list(ui: &mut egui::Ui, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
-    let mut delete_index: Option<usize> = None;
-    let mut start_edit_index: Option<usize> = None;
-
-    egui::ScrollArea::vertical()
-        .id_salt("preset_list")
-        .max_height(150.0)
-        .show(ui, |ui| {
-            egui::Grid::new("preset_grid")
-                .striped(true)
-                .min_col_width(20.0)
-                .show(ui, |ui| {
-                    for (idx, preset) in sidebar.presets.iter().enumerate() {
-                        let is_selected = idx == sidebar.selected_preset;
-
-                        if ui.selectable_label(is_selected, &preset.name).clicked() {
-                            sidebar.selected_preset = idx;
-                        }
-                        ui.label(&preset.host);
-                        if ui.small_button("✏").on_hover_text("Edit").clicked() {
-                            start_edit_index = Some(idx);
-                        }
-                        if ui.small_button("🗑").on_hover_text("Delete").clicked() {
-                            delete_index = Some(idx);
-                        }
-                        ui.end_row();
-                    }
-                });
-        });
-
-    if let Some(idx) = delete_index {
-        if sidebar.presets.len() > 1 {
-            sidebar.presets.remove(idx);
-            if sidebar.selected_preset >= sidebar.presets.len() {
-                sidebar.selected_preset = sidebar.presets.len() - 1;
-            }
-        }
-    }
-
-    if let Some(idx) = start_edit_index {
-        cfg.edit_name = sidebar.presets[idx].name.clone();
-        cfg.edit_host = sidebar.presets[idx].host.clone();
-        cfg.editing_index = Some(idx);
-    }
-}
-
-fn render_preset_form(ui: &mut egui::Ui, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
-    let is_editing = cfg.editing_index.is_some();
-
-    // Only show the form when editing or when user clicks "Add"
-    if !is_editing && !cfg.show_add_form {
-        if ui.small_button("➕ Add new preset").clicked() {
-            cfg.show_add_form = true;
-        }
-        return;
-    }
-
-    let title = if is_editing { "Edit Preset" } else { "New Preset" };
-    ui.label(title);
-
-    ui.horizontal(|ui| {
-        ui.label("Name:");
-        ui.add(egui::TextEdit::singleline(&mut cfg.edit_name).desired_width(100.0));
-        ui.label("Host:");
-        ui.add(egui::TextEdit::singleline(&mut cfg.edit_host).desired_width(120.0));
-    });
-
-    let can_save = !cfg.edit_name.trim().is_empty() && !cfg.edit_host.trim().is_empty();
-
-    ui.horizontal(|ui| {
-        if is_editing {
-            if ui.add_enabled(can_save, egui::Button::new("💾 Update")).clicked() {
-                if let Some(idx) = cfg.editing_index {
-                    sidebar.presets[idx] = TargetPreset {
-                        name: cfg.edit_name.trim().to_string(),
-                        host: cfg.edit_host.trim().to_string(),
-                    };
-                }
-                clear_form(cfg);
-            }
-        } else if ui.add_enabled(can_save, egui::Button::new("➕ Add")).clicked() {
-            sidebar.presets.push(TargetPreset {
-                name: cfg.edit_name.trim().to_string(),
-                host: cfg.edit_host.trim().to_string(),
-            });
-            clear_form(cfg);
-        }
-        if ui.button("Cancel").clicked() {
-            clear_form(cfg);
-        }
-    });
-}
-
-fn clear_form(cfg: &mut ConfigState) {
-    cfg.edit_name.clear();
-    cfg.edit_host.clear();
-    cfg.editing_index = None;
-    cfg.show_add_form = false;
 }
 
 fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
@@ -222,7 +102,6 @@ fn render_status(ui: &mut egui::Ui, cfg: &ConfigState) {
 
 fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &SidebarState) {
     let target = sidebar.selected_host();
-
     let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
     shared.config = PingConfig {
         target,
@@ -231,7 +110,7 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &SidebarS
         ping_interval_ms: cfg.ping_freq.max(100),
         duration_secs: cfg.duration_mins * 60,
     };
-    shared.gateway_enabled = cfg.gateway_enabled;
+    shared.gateway.enabled = cfg.gateway_enabled;
     shared.config_changed = true;
     drop(shared);
 
