@@ -8,9 +8,10 @@ description = "A lightweight desktop network monitor built with egui"
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "persistence"] }
 egui_plot = "0.31"
 chrono = "0.4"
+csv = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
-winapi = { version = "0.3", features = ["wincon"] }
 
 [profile.release]
 opt-level = "s"

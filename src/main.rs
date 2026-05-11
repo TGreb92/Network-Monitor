@@ -3,6 +3,10 @@
 //! Loads config, creates shared state, launches the GUI.
 //! Pinger threads are spawned after the window is created.
 
+// Build as a Windows GUI app — no console window at all.
+// Only in release builds so `cargo run` still shows a console for debugging.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod core;
 mod ui;
 
@@ -11,11 +15,6 @@ use core::pinger;
 use core::state::{new_shared_state, PingConfig};
 
 fn main() -> eframe::Result<()> {
-    #[cfg(windows)]
-    unsafe {
-        winapi::um::wincon::FreeConsole();
-    }
-
     let saved = config::load();
     let ping_config = PingConfig::from_saved(&saved);
     let shared = new_shared_state(ping_config);

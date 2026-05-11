@@ -39,12 +39,17 @@ impl NetworkMonitorApp {
             let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
             shared.config = PingConfig::from_saved(&saved);
             shared.gateway.enabled = saved.gateway_enabled;
+        }
 
-            if saved.auto_detect_gateway {
+        // Detect gateway in a background thread to avoid stealing window focus
+        if saved.auto_detect_gateway {
+            let state_clone = state.clone();
+            std::thread::spawn(move || {
                 if let Some(ip) = pinger::detect_gateway() {
+                    let mut shared = state_clone.lock().unwrap_or_else(|err| err.into_inner());
                     shared.gateway.ip = Some(ip);
                 }
-            }
+            });
         }
 
         Self {

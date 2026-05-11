@@ -180,13 +180,15 @@ fn render_quick_stats(ui: &mut egui::Ui, snap: &SidebarSnapshot) {
 fn render_export(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarState) {
     ui.heading("📥 Export");
     ui.horizontal(|ui| {
-        if ui.button("CSV").clicked() {
-            do_export(state, sidebar, "csv");
-        }
-        if ui.button("JSON").clicked() {
-            do_export(state, sidebar, "json");
-        }
+        if ui.button("CSV").clicked() { do_export(state, sidebar, "csv"); }
+        if ui.button("JSON").clicked() { do_export(state, sidebar, "json"); }
     });
+    if ui.button("📋 ISP Report").on_hover_text("Human-readable report for your ISP").clicked() {
+        do_export(state, sidebar, "txt");
+    }
+    if ui.button("🖥 Console Log").on_hover_text("Raw ping log output").clicked() {
+        do_export(state, sidebar, "log");
+    }
 
     // Show status message for 5 seconds
     if let Some((text, when)) = &sidebar.export_status {
@@ -205,6 +207,8 @@ fn do_export(state: &SharedState, sidebar: &mut SidebarState, format: &str) {
     let result = match format {
         "csv" => export::write_csv(&path, &shared),
         "json" => export::write_json(&path, &shared),
+        "txt" => export::write_isp_report(&path, &shared),
+        "log" => export::write_console_log(&path, &shared),
         _ => Ok(()),
     };
     drop(shared);
