@@ -248,6 +248,8 @@ pub struct PingState {
     pub gateway: GatewayStats,
     pub loss_tracker: LossBatchTracker,
     pub interval: IntervalTracker,
+    /// Set by pinger when auto-stop fires; GUI checks and runs auto-export
+    pub auto_export_pending: bool,
 }
 
 impl PingState {
@@ -268,6 +270,7 @@ impl PingState {
             gateway: GatewayStats::new(),
             loss_tracker: LossBatchTracker::new(),
             interval: IntervalTracker::new(),
+            auto_export_pending: false,
         }
     }
 
@@ -361,6 +364,7 @@ impl PingState {
         self.gateway.reset();
         self.loss_tracker.reset();
         self.interval.reset();
+        self.auto_export_pending = false;
     }
 }
 

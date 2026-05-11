@@ -11,7 +11,6 @@ mod core;
 mod ui;
 
 use core::config;
-use core::pinger;
 use core::state::{new_shared_state, PingConfig};
 
 fn main() -> eframe::Result<()> {
@@ -23,7 +22,8 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Network Monitor")
             .with_inner_size([900.0, 600.0])
-            .with_min_inner_size([600.0, 400.0]),
+            .with_min_inner_size([600.0, 400.0])
+            .with_active(true),
         ..Default::default()
     };
 
@@ -32,8 +32,8 @@ fn main() -> eframe::Result<()> {
         "Network Monitor",
         options,
         Box::new(move |cc| {
-            let _pinger_handle = pinger::start_pinger(state_clone.clone());
-            let _gw_pinger_handle = pinger::start_gateway_pinger(state_clone.clone());
+            // Do NOT spawn threads here — let the window render first.
+            // Threads are spawned on the first frame via App::update().
             Ok(Box::new(ui::app::NetworkMonitorApp::new(state_clone, cc)))
         }),
     )

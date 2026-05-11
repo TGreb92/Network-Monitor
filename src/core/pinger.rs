@@ -129,6 +129,7 @@ fn check_and_stop_if_duration_exceeded(state: &SharedState, duration_secs: u64) 
     if shared.elapsed_secs() >= duration_secs as f64 {
         shared.flush_partial_report();
         shared.running = false;
+        shared.auto_export_pending = true;
         shared.push_log(format!(
             "[{}] ⏱ Test duration reached — stopped automatically",
             chrono::Local::now().naive_local().format("%H:%M:%S")

@@ -15,14 +15,24 @@ pub struct SidebarState {
     pub export_status: Option<(String, Instant)>,
     pub presets: Vec<TargetPreset>,
     pub selected_preset: usize,
+    pub export_path: String,
+    pub auto_export_csv: bool,
+    pub auto_export_json: bool,
+    pub auto_export_isp: bool,
+    pub auto_export_log: bool,
 }
 
 impl SidebarState {
-    pub fn new(presets: Vec<TargetPreset>, selected_preset: usize) -> Self {
+    pub fn new(presets: Vec<TargetPreset>, selected_preset: usize, export_path: String) -> Self {
         Self {
             export_status: None,
             presets,
             selected_preset,
+            export_path,
+            auto_export_csv: false,
+            auto_export_json: false,
+            auto_export_isp: false,
+            auto_export_log: false,
         }
     }
 
@@ -66,6 +76,10 @@ fn read_sidebar_snapshot(state: &SharedState) -> SidebarSnapshot {
 /// Render the full sidebar panel
 pub fn render(ctx: &egui::Context, state: &SharedState, sidebar: &mut SidebarState) {
     let snapshot = read_sidebar_snapshot(state);
+
+    // Check if pinger auto-stopped and needs auto-export
+    check_auto_export_pending(state, sidebar);
+
     egui::SidePanel::left("control_panel")
         .resizable(true)
         .default_width(180.0)
@@ -117,7 +131,7 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
     }
 }
 
-fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &SidebarState, snap: &SidebarSnapshot) {
+fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarState, snap: &SidebarSnapshot) {
     let button_size = egui::vec2(ui.available_width(), 32.0);
 
     if snap.running {
@@ -128,6 +142,8 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &SidebarSt
             let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
             shared.flush_partial_report();
             shared.running = false;
+            drop(shared);
+            run_auto_export_if_enabled(state, sidebar);
         }
         ui.colored_label(egui::Color32::from_rgb(100, 255, 100), "● RUNNING");
         ui.label(format!("⏱ Elapsed: {}", snap.elapsed_display));
@@ -190,6 +206,13 @@ fn render_export(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarSt
         do_export(state, sidebar, "log");
     }
 
+    ui.add_space(8.0);
+    ui.separator();
+    ui.heading("📂 Import");
+    if ui.button("📥 Load JSON…").on_hover_text("Import a previous JSON export to review").clicked() {
+        do_import(state, sidebar);
+    }
+
     // Show status message for 5 seconds
     if let Some((text, when)) = &sidebar.export_status {
         if when.elapsed().as_secs() < 5 {
@@ -202,7 +225,7 @@ fn do_export(state: &SharedState, sidebar: &mut SidebarState, format: &str) {
     let shared = state.lock().unwrap_or_else(|err| err.into_inner());
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let filename = format!("network-monitor-{}.{}", timestamp, format);
-    let path = export::export_dir().join(&filename);
+    let path = export::export_dir(&sidebar.export_path).join(&filename);
 
     let result = match format {
         "csv" => export::write_csv(&path, &shared),
@@ -217,4 +240,85 @@ fn do_export(state: &SharedState, sidebar: &mut SidebarState, format: &str) {
         Ok(()) => sidebar.export_status = Some((format!("✅ Saved {}", filename), Instant::now())),
         Err(err) => sidebar.export_status = Some((format!("❌ {}", err), Instant::now())),
     }
+}
+
+fn do_import(state: &SharedState, sidebar: &mut SidebarState) {
+    let file = rfd::FileDialog::new()
+        .set_title("Import JSON export")
+        .add_filter("JSON files", &["json"])
+        .pick_file();
+
+    let Some(path) = file else {
+        return;
+    };
+
+    match export::read_json(&path) {
+        Ok(imported) => {
+            let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            // Stop any running test before replacing state
+            shared.running = false;
+            // Replace all data with imported data
+            shared.config = imported.config;
+            shared.results = imported.results;
+            shared.log_entries = imported.log_entries;
+            shared.interval_reports = imported.interval_reports;
+            shared.all_latencies = imported.all_latencies;
+            shared.total_sent = imported.total_sent;
+            shared.total_received = imported.total_received;
+            shared.seq_counter = imported.seq_counter;
+            shared.jitter = imported.jitter;
+            shared.gateway = imported.gateway;
+            shared.loss_tracker = imported.loss_tracker;
+            shared.interval = imported.interval;
+            shared.start_time = None;
+            shared.config_changed = false;
+
+            let filename = path.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".into());
+            sidebar.export_status = Some((
+                format!("✅ Imported {}", filename),
+                Instant::now(),
+            ));
+        }
+        Err(err) => {
+            sidebar.export_status = Some((format!("❌ {}", err), Instant::now()));
+        }
+    }
+}
+
+/// Check if the pinger auto-stopped and there's a pending auto-export
+fn check_auto_export_pending(state: &SharedState, sidebar: &mut SidebarState) {
+    let pending = {
+        let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+        shared.auto_export_pending
+    };
+
+    if pending {
+        run_auto_export_if_enabled(state, sidebar);
+        let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+        shared.auto_export_pending = false;
+    }
+}
+
+/// Run auto-export for all enabled formats
+fn run_auto_export_if_enabled(state: &SharedState, sidebar: &mut SidebarState) {
+    let any_enabled = sidebar.auto_export_csv || sidebar.auto_export_json
+        || sidebar.auto_export_isp || sidebar.auto_export_log;
+    if !any_enabled {
+        return;
+    }
+
+    let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    let msg = export::run_auto_export(
+        &shared,
+        &sidebar.export_path,
+        sidebar.auto_export_csv,
+        sidebar.auto_export_json,
+        sidebar.auto_export_isp,
+        sidebar.auto_export_log,
+    );
+    drop(shared);
+
+    sidebar.export_status = Some((msg, Instant::now()));
 }

@@ -18,7 +18,6 @@ pub struct TargetPreset {
 /// Serializable config that gets saved to disk
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SavedConfig {
-    /// Index of the currently selected preset
     pub selected_preset: usize,
     pub timeout_ms: u32,
     pub interval_secs: u64,
@@ -27,6 +26,17 @@ pub struct SavedConfig {
     pub auto_detect_gateway: bool,
     pub duration_mins: u64,
     pub presets: Vec<TargetPreset>,
+    /// Custom export directory. Empty string = default (exe_dir/exports/).
+    pub export_path: String,
+    /// Auto-export flags — which formats to export when a test stops
+    #[serde(default)]
+    pub auto_export_csv: bool,
+    #[serde(default)]
+    pub auto_export_json: bool,
+    #[serde(default)]
+    pub auto_export_isp: bool,
+    #[serde(default)]
+    pub auto_export_log: bool,
 }
 
 impl Default for SavedConfig {
@@ -40,6 +50,11 @@ impl Default for SavedConfig {
             auto_detect_gateway: true,
             duration_mins: 0,
             presets: default_presets(),
+            export_path: String::new(),
+            auto_export_csv: false,
+            auto_export_json: false,
+            auto_export_isp: false,
+            auto_export_log: false,
         }
     }
 }

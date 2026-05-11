@@ -29,6 +29,8 @@ pub struct NetworkMonitorApp {
     console: ConsoleState,
     config_tab: ConfigState,
     monitor: MonitorState,
+    /// Whether background threads have been spawned (deferred to first frame)
+    initialized: bool,
 }
 
 impl NetworkMonitorApp {
@@ -41,9 +43,38 @@ impl NetworkMonitorApp {
             shared.gateway.enabled = saved.gateway_enabled;
         }
 
-        // Detect gateway in a background thread to avoid stealing window focus
+        let mut sidebar = SidebarState::new(saved.presets.clone(), saved.selected_preset, saved.export_path.clone());
+        sidebar.auto_export_csv = saved.auto_export_csv;
+        sidebar.auto_export_json = saved.auto_export_json;
+        sidebar.auto_export_isp = saved.auto_export_isp;
+        sidebar.auto_export_log = saved.auto_export_log;
+
+        Self {
+            state,
+            active_tab: Tab::Monitor,
+            sidebar,
+            console: ConsoleState::new(),
+            config_tab: ConfigState::from_saved(&saved),
+            monitor: MonitorState::new(),
+            initialized: false,
+        }
+    }
+
+    /// Spawn background threads on the first frame, after the window is fully visible.
+    fn initialize_once(&mut self) {
+        if self.initialized {
+            return;
+        }
+        self.initialized = true;
+
+        // Spawn pinger threads
+        pinger::start_pinger(self.state.clone());
+        pinger::start_gateway_pinger(self.state.clone());
+
+        // Detect gateway in background
+        let saved = config::load();
         if saved.auto_detect_gateway {
-            let state_clone = state.clone();
+            let state_clone = self.state.clone();
             std::thread::spawn(move || {
                 if let Some(ip) = pinger::detect_gateway() {
                     let mut shared = state_clone.lock().unwrap_or_else(|err| err.into_inner());
@@ -51,20 +82,14 @@ impl NetworkMonitorApp {
                 }
             });
         }
-
-        Self {
-            state,
-            active_tab: Tab::Monitor,
-            sidebar: SidebarState::new(saved.presets.clone(), saved.selected_preset),
-            console: ConsoleState::new(),
-            config_tab: ConfigState::from_saved(&saved),
-            monitor: MonitorState::new(),
-        }
     }
 }
 
 impl eframe::App for NetworkMonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Spawn background threads after the window is visible (first frame)
+        self.initialize_once();
+
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
         sidebar::render(ctx, &self.state, &mut self.sidebar);

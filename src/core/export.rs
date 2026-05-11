@@ -3,17 +3,72 @@
 //! Writes ping results, interval reports, human-readable ISP reports,
 //! and raw console logs to files next to the executable.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-use crate::core::state::PingState;
+use crate::core::state::{
+    PingState, PingResult, PingLogEntry, IntervalReport,
+    PingConfig, GatewayStats, LossBatchTracker, MAX_LATENCIES,
+};
 
-/// Get the directory to write export files to (same directory as the executable)
-pub fn export_dir() -> std::path::PathBuf {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|dir| dir.to_path_buf()))
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+/// Get the export directory. If `custom_path` is non-empty, use it.
+/// Otherwise default to an `exports/` subfolder next to the executable.
+/// Creates the directory if it doesn't exist.
+pub fn export_dir(custom_path: &str) -> std::path::PathBuf {
+    let dir = if custom_path.is_empty() {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|dir| dir.join("exports")))
+            .unwrap_or_else(|| std::path::PathBuf::from("exports"))
+    } else {
+        std::path::PathBuf::from(custom_path)
+    };
+
+    // Create directory if it doesn't exist
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Run auto-export for all enabled formats. Returns a summary message.
+pub fn run_auto_export(
+    state: &PingState,
+    export_path: &str,
+    csv: bool,
+    json: bool,
+    isp: bool,
+    log: bool,
+) -> String {
+    let dir = export_dir(export_path);
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let mut exported: Vec<&str> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    let formats: &[(&str, bool)] = &[
+        ("csv", csv), ("json", json), ("txt", isp), ("log", log),
+    ];
+
+    for (ext, enabled) in formats {
+        if !enabled { continue; }
+        let filename = format!("network-monitor-{}.{}", timestamp, ext);
+        let path = dir.join(&filename);
+        let result = match *ext {
+            "csv" => write_csv(&path, state),
+            "json" => write_json(&path, state),
+            "txt" => write_isp_report(&path, state),
+            "log" => write_console_log(&path, state),
+            _ => Ok(()),
+        };
+        match result {
+            Ok(()) => exported.push(ext),
+            Err(err) => errors.push(format!("{}: {}", ext, err)),
+        }
+    }
+
+    if errors.is_empty() {
+        format!("✅ Auto-exported: {}", exported.join(", "))
+    } else {
+        format!("⚠ Exported: {} | Errors: {}", exported.join(", "), errors.join("; "))
+    }
 }
 
 /// Write a human-readable ISP report suitable for email/support tickets
@@ -246,15 +301,17 @@ fn csv_to_io_error(err: csv::Error) -> std::io::Error {
 
 // --- JSON export via serde ---
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct JsonExport {
     test_info: JsonTestInfo,
     summary: JsonSummary,
+    gateway: Option<JsonGateway>,
     results: Vec<JsonResult>,
     interval_reports: Vec<JsonIntervalReport>,
+    console_log: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct JsonTestInfo {
     generated: String,
     target: String,
@@ -263,7 +320,7 @@ struct JsonTestInfo {
     ping_timeout_ms: u32,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct JsonSummary {
     total_sent: u64,
     total_received: u64,
@@ -276,7 +333,18 @@ struct JsonSummary {
     avg_jitter_ms: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+struct JsonGateway {
+    ip: String,
+    total_sent: u64,
+    total_received: u64,
+    packet_loss_pct: f64,
+    avg_latency_ms: f64,
+    avg_jitter_ms: f64,
+    latencies: Vec<f64>,
+}
+
+#[derive(Serialize, Deserialize)]
 struct JsonResult {
     seq: u64,
     success: bool,
@@ -285,7 +353,7 @@ struct JsonResult {
     elapsed_secs: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct JsonIntervalReport {
     start: String,
     end: String,
@@ -299,9 +367,24 @@ struct JsonIntervalReport {
     max_ms: f64,
 }
 
-/// Write ping results and interval reports to a JSON file via serde
+/// Write complete JSON export with all data needed to reconstruct the UI
 pub fn write_json(path: &std::path::Path, state: &PingState) -> std::io::Result<()> {
     let min = state.min_latency();
+
+    let gateway = if state.gateway.enabled && state.gateway.ip.is_some() {
+        Some(JsonGateway {
+            ip: state.gateway.ip.clone().unwrap_or_default(),
+            total_sent: state.gateway.total_sent,
+            total_received: state.gateway.total_received,
+            packet_loss_pct: round1(state.gateway.packet_loss_pct()),
+            avg_latency_ms: round1(state.gateway.avg_latency()),
+            avg_jitter_ms: round1(state.gateway.jitter.avg()),
+            latencies: state.gateway.all_latencies.iter().map(|lat| round1(*lat)).collect(),
+        })
+    } else {
+        None
+    };
+
     let export = JsonExport {
         test_info: JsonTestInfo {
             generated: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -321,6 +404,7 @@ pub fn write_json(path: &std::path::Path, state: &PingState) -> std::io::Result<
             max_latency_ms: round1(state.max_latency()),
             avg_jitter_ms: round1(state.jitter.avg()),
         },
+        gateway,
         results: state.results.iter().map(|result| JsonResult {
             seq: result.seq,
             success: result.success,
@@ -340,6 +424,7 @@ pub fn write_json(path: &std::path::Path, state: &PingState) -> std::io::Result<
             min_ms: round1(report.min_latency_ms),
             max_ms: round1(report.max_latency_ms),
         }).collect(),
+        console_log: state.log_entries.iter().map(|entry| entry.message.clone()).collect(),
     };
 
     let file = std::fs::File::create(path)?;
@@ -350,4 +435,104 @@ pub fn write_json(path: &std::path::Path, state: &PingState) -> std::io::Result<
 /// Round to 1 decimal place for clean JSON output
 fn round1(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
+}
+
+/// Import a previously exported JSON file and reconstruct PingState for viewing.
+/// The imported state is read-only (not running), meant for reviewing past sessions.
+pub fn read_json(path: &std::path::Path) -> Result<PingState, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|err| format!("Failed to open file: {}", err))?;
+    let reader = std::io::BufReader::new(file);
+    let export: JsonExport = serde_json::from_reader(reader)
+        .map_err(|err| format!("Failed to parse JSON: {}", err))?;
+
+    let config = PingConfig {
+        target: export.test_info.target,
+        timeout_ms: export.test_info.ping_timeout_ms,
+        interval_secs: 60,
+        ping_interval_ms: export.test_info.ping_interval_ms,
+        duration_secs: 0,
+    };
+
+    let mut state = PingState::new(config);
+    state.total_sent = export.summary.total_sent;
+    state.total_received = export.summary.total_received;
+    state.loss_tracker = LossBatchTracker {
+        count: export.summary.loss_events,
+        in_batch: false,
+    };
+
+    // Rebuild results, latencies, jitter from individual ping data
+    for json_result in &export.results {
+        let timestamp = chrono::NaiveDateTime::parse_from_str(
+            &json_result.timestamp, "%Y-%m-%d %H:%M:%S"
+        ).unwrap_or_default();
+
+        let result = PingResult {
+            seq: json_result.seq,
+            success: json_result.success,
+            latency_ms: json_result.latency_ms,
+            timestamp,
+            elapsed_secs: json_result.elapsed_secs,
+        };
+
+        if let Some(latency) = json_result.latency_ms {
+            state.jitter.record(latency);
+            if state.all_latencies.len() >= MAX_LATENCIES {
+                state.all_latencies.pop_front();
+            }
+            state.all_latencies.push_back(latency);
+        }
+
+        state.results.push_back(result);
+    }
+
+    state.seq_counter = export.results.last().map(|res| res.seq).unwrap_or(0);
+
+    // Rebuild interval reports
+    for json_report in &export.interval_reports {
+        let start_time = chrono::NaiveTime::parse_from_str(&json_report.start, "%H:%M:%S")
+            .unwrap_or_default();
+        let end_time = chrono::NaiveTime::parse_from_str(&json_report.end, "%H:%M:%S")
+            .unwrap_or_default();
+        let today = chrono::Local::now().date_naive();
+
+        state.interval_reports.push_back(IntervalReport {
+            start_time: today.and_time(start_time),
+            end_time: today.and_time(end_time),
+            total_pings: json_report.total,
+            successful: json_report.ok,
+            failed: json_report.fail,
+            packet_loss_pct: json_report.loss_pct,
+            avg_latency_ms: json_report.avg_ms,
+            min_latency_ms: json_report.min_ms,
+            max_latency_ms: json_report.max_ms,
+            loss_events: json_report.loss_events,
+        });
+    }
+
+    // Rebuild gateway stats if present
+    if let Some(gw) = &export.gateway {
+        state.gateway = GatewayStats::new();
+        state.gateway.ip = Some(gw.ip.clone());
+        state.gateway.enabled = true;
+        state.gateway.total_sent = gw.total_sent;
+        state.gateway.total_received = gw.total_received;
+        for latency in &gw.latencies {
+            state.gateway.jitter.record(*latency);
+            if state.gateway.all_latencies.len() >= MAX_LATENCIES {
+                state.gateway.all_latencies.pop_front();
+            }
+            state.gateway.all_latencies.push_back(*latency);
+        }
+    }
+
+    // Rebuild console log
+    for message in &export.console_log {
+        state.log_entries.push_back(PingLogEntry {
+            message: message.clone(),
+        });
+    }
+
+    Ok(state)
 }

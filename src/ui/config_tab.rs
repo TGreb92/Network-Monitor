@@ -19,6 +19,11 @@ pub struct ConfigState {
     pub gateway_enabled: bool,
     pub auto_detect_gateway: bool,
     pub duration_mins: u64,
+    pub export_path: String,
+    pub auto_export_csv: bool,
+    pub auto_export_json: bool,
+    pub auto_export_isp: bool,
+    pub auto_export_log: bool,
     pub status: Option<(String, Instant)>,
     pub preset_editor: PresetEditorState,
 }
@@ -32,6 +37,11 @@ impl ConfigState {
             gateway_enabled: saved.gateway_enabled,
             auto_detect_gateway: saved.auto_detect_gateway,
             duration_mins: saved.duration_mins,
+            export_path: saved.export_path.clone(),
+            auto_export_csv: saved.auto_export_csv,
+            auto_export_json: saved.auto_export_json,
+            auto_export_isp: saved.auto_export_isp,
+            auto_export_log: saved.auto_export_log,
             status: None,
             preset_editor: PresetEditorState::new(),
         }
@@ -51,6 +61,13 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
     ui.add_space(12.0);
     render_buttons(ui, state, cfg, sidebar);
     render_status(ui, cfg);
+
+    // Sync export settings to sidebar so exports use the latest values
+    sidebar.export_path = cfg.export_path.clone();
+    sidebar.auto_export_csv = cfg.auto_export_csv;
+    sidebar.auto_export_json = cfg.auto_export_json;
+    sidebar.auto_export_isp = cfg.auto_export_isp;
+    sidebar.auto_export_log = cfg.auto_export_log;
 }
 
 fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
@@ -75,6 +92,41 @@ fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
 
     ui.label("Test duration (minutes, 0 = unlimited):");
     ui.add(egui::DragValue::new(&mut cfg.duration_mins).range(0..=1440).speed(1).suffix(" min"));
+    ui.add_space(8.0);
+
+    ui.heading("📁 Export");
+    ui.add_space(4.0);
+    ui.label("Export folder (empty = exe_dir/exports/):");
+    ui.horizontal(|ui| {
+        let display = if cfg.export_path.is_empty() {
+            "(default)".to_string()
+        } else {
+            cfg.export_path.clone()
+        };
+        ui.monospace(&display);
+        if ui.button("📂 Browse…").clicked() {
+            if let Some(folder) = rfd::FileDialog::new()
+                .set_title("Select export folder")
+                .pick_folder()
+            {
+                cfg.export_path = folder.display().to_string();
+            }
+        }
+        if !cfg.export_path.is_empty() && ui.button("🔄 Reset").on_hover_text("Reset to default (exe_dir/exports/)").clicked() {
+            cfg.export_path.clear();
+        }
+    });
+
+    ui.add_space(8.0);
+    ui.label("Auto-export on stop:");
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut cfg.auto_export_csv, "CSV");
+        ui.checkbox(&mut cfg.auto_export_json, "JSON");
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut cfg.auto_export_isp, "ISP Report");
+        ui.checkbox(&mut cfg.auto_export_log, "Console Log");
+    });
 }
 
 fn render_buttons(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
@@ -123,6 +175,11 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &SidebarS
         auto_detect_gateway: cfg.auto_detect_gateway,
         duration_mins: cfg.duration_mins,
         presets: sidebar.presets.clone(),
+        export_path: cfg.export_path.clone(),
+        auto_export_csv: cfg.auto_export_csv,
+        auto_export_json: cfg.auto_export_json,
+        auto_export_isp: cfg.auto_export_isp,
+        auto_export_log: cfg.auto_export_log,
     };
     match config::save(&saved) {
         Ok(()) => cfg.status = Some(("✅ Config saved".into(), Instant::now())),
