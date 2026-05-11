@@ -29,8 +29,8 @@ pub struct NetworkMonitorApp {
     console: ConsoleState,
     config_tab: ConfigState,
     monitor: MonitorState,
-    /// Whether background threads have been spawned (deferred to first frame)
-    initialized: bool,
+    /// Frame counter for startup sequence; None after startup completes
+    startup_frames_remaining: Option<u32>,
 }
 
 impl NetworkMonitorApp {
@@ -56,39 +56,42 @@ impl NetworkMonitorApp {
             console: ConsoleState::new(),
             config_tab: ConfigState::from_saved(&saved),
             monitor: MonitorState::new(),
-            initialized: false,
+            startup_frames_remaining: Some(5),
         }
     }
 
-    /// Spawn background threads on the first frame, after the window is fully visible.
-    fn initialize_once(&mut self) {
-        if self.initialized {
-            return;
-        }
-        self.initialized = true;
+    /// Spawn background threads after the window has rendered several frames.
+    /// Also forces window focus on the first few frames to combat Windows
+    /// stealing focus during OpenGL/glow context setup.
+    fn startup_sequence(&mut self, ctx: &egui::Context) {
+        let Some(remaining) = self.startup_frames_remaining else { return };
 
-        // Spawn pinger threads
-        pinger::start_pinger(self.state.clone());
-        pinger::start_gateway_pinger(self.state.clone());
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
 
-        // Detect gateway in background
-        let saved = config::load();
-        if saved.auto_detect_gateway {
-            let state_clone = self.state.clone();
-            std::thread::spawn(move || {
-                if let Some(ip) = pinger::detect_gateway() {
-                    let mut shared = state_clone.lock().unwrap_or_else(|err| err.into_inner());
-                    shared.gateway.ip = Some(ip);
-                }
-            });
+        // Spawn threads on frame 3 (window is fully painted by then)
+        if remaining == 3 {
+            pinger::start_pinger(self.state.clone());
+            pinger::start_gateway_pinger(self.state.clone());
+
+            let saved = config::load();
+            if saved.auto_detect_gateway {
+                let state_clone = self.state.clone();
+                std::thread::spawn(move || {
+                    if let Some(ip) = pinger::detect_gateway() {
+                        let mut shared = state_clone.lock().unwrap_or_else(|err| err.into_inner());
+                        shared.gateway.ip = Some(ip);
+                    }
+                });
+            }
         }
+
+        self.startup_frames_remaining = if remaining <= 1 { None } else { Some(remaining - 1) };
     }
 }
 
 impl eframe::App for NetworkMonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Spawn background threads after the window is visible (first frame)
-        self.initialize_once();
+        self.startup_sequence(ctx);
 
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
