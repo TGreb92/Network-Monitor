@@ -7,7 +7,7 @@ use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 
 use crate::core::state::PingState;
-use crate::ui::helpers::{stat_card, loss_color, latency_color, jitter_color};
+use crate::ui::components::helpers::{stat_card, loss_color, latency_color, jitter_color};
 
 /// Time window options for the chart (in seconds, 0 = show all)
 const TIME_WINDOWS: &[(f64, &str)] = &[

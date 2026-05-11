@@ -5,7 +5,7 @@
 use eframe::egui;
 
 use crate::core::config::TargetPreset;
-use crate::ui::sidebar::SidebarState;
+use crate::ui::components::sidebar::SidebarState;
 
 /// Preset editor state (lives in ConfigState)
 pub struct PresetEditorState {

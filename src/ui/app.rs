@@ -7,11 +7,11 @@ use eframe::egui;
 use crate::core::config;
 use crate::core::pinger;
 use crate::core::state::{PingConfig, SharedState};
-use crate::ui::config_tab::{self, ConfigState};
-use crate::ui::console::{self, ConsoleState};
-use crate::ui::monitor::{self, MonitorState};
-use crate::ui::sidebar::{self, SidebarState};
-use crate::ui::help;
+use crate::ui::tabs::config::ConfigState;
+use crate::ui::tabs::console::{self, ConsoleState};
+use crate::ui::tabs::monitor::{self, MonitorState};
+use crate::ui::components::sidebar::{self, SidebarState};
+use crate::ui::tabs::help;
 
 #[derive(PartialEq)]
 enum Tab {
@@ -109,7 +109,7 @@ impl eframe::App for NetworkMonitorApp {
                     monitor::render(ui, &shared, &mut self.monitor);
                 }
                 Tab::Console => console::render(ui, &self.state, &mut self.console),
-                Tab::Config => config_tab::render(ui, &self.state, &mut self.config_tab, &mut self.sidebar),
+                Tab::Config => crate::ui::tabs::config::render(ui, &self.state, &mut self.config_tab, &mut self.sidebar),
                 Tab::Help => help::render(ui),
             }
         });

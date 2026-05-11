@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use crate::core::config::{self, SavedConfig, default_presets};
 use crate::core::state::{PingConfig, SharedState};
-use crate::ui::presets::{self, PresetEditorState};
-use crate::ui::sidebar::SidebarState;
+use crate::ui::components::presets::{self, PresetEditorState};
+use crate::ui::components::sidebar::SidebarState;
 
 /// Config tab local state
 pub struct ConfigState {

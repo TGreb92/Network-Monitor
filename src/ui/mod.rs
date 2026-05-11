@@ -1,13 +1,7 @@
 //! # UI — egui frontend components
 //!
-//! Each tab and panel is a separate module with its own state struct.
-//! The app module wires them together.
+//! Tabs live in `tabs/`, shared components in `components/`.
 
 pub mod app;
-pub mod config_tab;
-pub mod console;
-pub mod help;
-pub mod helpers;
-pub mod monitor;
-pub mod presets;
-pub mod sidebar;
+pub mod components;
+pub mod tabs;
