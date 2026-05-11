@@ -1,4 +1,4 @@
-//! # UI — egui frontend components
+//! # UI - egui frontend components
 //!
 //! Tabs live in `tabs/`, shared components in `components/`.
 

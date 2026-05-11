@@ -28,7 +28,7 @@ pub struct SavedConfig {
     pub presets: Vec<TargetPreset>,
     /// Custom export directory. Empty string = default (exe_dir/exports/).
     pub export_path: String,
-    /// Auto-export flags — which formats to export when a test stops
+    /// Auto-export flags - which formats to export when a test stops
     #[serde(default)]
     pub auto_export_csv: bool,
     #[serde(default)]

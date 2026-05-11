@@ -1,4 +1,4 @@
-//! # Config Tab — Settings with TOML persistence
+//! # Config Tab - Settings with TOML persistence
 //!
 //! Ping parameters, gateway settings, and duration.
 //! Preset management is in `presets.rs`.

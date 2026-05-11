@@ -1,4 +1,4 @@
-//! # UI Helpers — Shared widgets and color functions
+//! # UI Helpers - Shared widgets and color functions
 //!
 //! Reusable UI primitives used across the app: stat cards and
 //! traffic-light color mappings for loss, latency, and jitter.

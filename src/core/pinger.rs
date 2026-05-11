@@ -43,25 +43,20 @@ pub fn detect_gateway() -> Option<String> {
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    match cmd.output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                // Look for "Default Gateway" lines with an actual IP
-                if line.contains("Default Gateway") {
-                    if let Some(colon_pos) = line.rfind(':') {
-                        let ip = line[colon_pos + 1..].trim();
-                        // Validate it looks like an IPv4 address
-                        if !ip.is_empty() && ip.contains('.') && ip != "0.0.0.0" {
-                            return Some(ip.to_string());
-                        }
-                    }
-                }
-            }
-            None
+    let output = cmd.output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for line in stdout.lines() {
+        if !line.contains("Default Gateway") {
+            continue;
         }
-        Err(_) => None,
+        let Some(colon_pos) = line.rfind(':') else { continue };
+        let ip = line[colon_pos + 1..].trim();
+        if !ip.is_empty() && ip.contains('.') && ip != "0.0.0.0" {
+            return Some(ip.to_string());
+        }
     }
+    None
 }
 
 /// Main pinger loop. Runs indefinitely, checking the `running` flag each iteration.
@@ -131,7 +126,7 @@ fn check_and_stop_if_duration_exceeded(state: &SharedState, duration_secs: u64) 
         shared.running = false;
         shared.auto_export_pending = true;
         shared.push_log(format!(
-            "[{}] ⏱ Test duration reached — stopped automatically",
+            "[{}] ⏱ Test duration reached - stopped automatically",
             chrono::Local::now().naive_local().format("%H:%M:%S")
         ));
         true
@@ -159,12 +154,8 @@ fn record_ping_result(
         shared.config_changed = false;
     }
 
-    if shared.start_time.is_none() {
-        shared.start_time = Some(Instant::now());
-    }
-    let elapsed_secs = shared.start_time
-        .map(|start| start.elapsed().as_secs_f64())
-        .unwrap_or(0.0);
+    let start = shared.start_time.get_or_insert_with(Instant::now);
+    let elapsed_secs = start.elapsed().as_secs_f64();
 
     shared.seq_counter += 1;
     let seq = shared.seq_counter;
@@ -209,22 +200,23 @@ fn accumulate_interval(
     }
     shared.interval.results.push(result);
 
-    if let Some(start) = shared.interval.start {
-        if start.elapsed() >= Duration::from_secs(interval_secs) {
-            let report = crate::core::state::build_interval_report(
-                &shared.interval.results,
-                shared.interval.start_time.unwrap_or(now),
-                now,
-            );
-            shared.interval_reports.push_back(report);
-            if shared.interval_reports.len() > 256 {
-                shared.interval_reports.pop_front();
-            }
-            shared.interval.results.clear();
-            shared.interval.start = Some(Instant::now());
-            shared.interval.start_time = Some(now);
-        }
+    let Some(start) = shared.interval.start else { return };
+    if start.elapsed() < Duration::from_secs(interval_secs) {
+        return;
     }
+
+    let report = crate::core::state::build_interval_report(
+        &shared.interval.results,
+        shared.interval.start_time.unwrap_or(now),
+        now,
+    );
+    shared.interval_reports.push_back(report);
+    if shared.interval_reports.len() > 256 {
+        shared.interval_reports.pop_front();
+    }
+    shared.interval.results.clear();
+    shared.interval.start = Some(Instant::now());
+    shared.interval.start_time = Some(now);
 }
 
 /// Sleep to maintain the configured ping cadence, minus time already spent.
@@ -315,19 +307,11 @@ pub fn execute_ping(target: &str, timeout_ms: u32) -> (bool, Option<f64>, String
 /// - `time<1ms` (sub-millisecond response)
 fn parse_latency(output: &str) -> Option<f64> {
     for line in output.lines() {
-        if let Some(pos) = line.find("time=") {
+        let pos = line.find("time=").or_else(|| line.find("time<"));
+        if let Some(pos) = pos {
             let after = &line[pos + 5..];
             let num_str: String = after.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-            if let Ok(val) = num_str.parse::<f64>() {
-                return Some(val);
-            }
-        }
-        if let Some(pos) = line.find("time<") {
-            let after = &line[pos + 5..];
-            let num_str: String = after.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-            if let Ok(val) = num_str.parse::<f64>() {
-                return Some(val);
-            }
+            return num_str.parse().ok();
         }
     }
     None

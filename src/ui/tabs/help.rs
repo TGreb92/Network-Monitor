@@ -1,4 +1,4 @@
-//! # Help Tab — Explains all metrics, diagnosis logic, and UI elements
+//! # Help Tab - Explains all metrics, diagnosis logic, and UI elements
 //!
 //! Provides in-app documentation so users understand what each
 //! stat card, chart element, and diagnosis verdict means.
@@ -23,7 +23,7 @@ pub fn render(ui: &mut egui::Ui) {
 }
 
 fn render_sidebar_section(ui: &mut egui::Ui) {
-    ui.heading("📋 Sidebar — Stats Explained");
+    ui.heading("📋 Sidebar - Stats Explained");
     ui.add_space(4.0);
 
     help_item(ui, "Target Selector",
@@ -58,7 +58,7 @@ fn render_sidebar_section(ui: &mut egui::Ui) {
 }
 
 fn render_metrics_section(ui: &mut egui::Ui) {
-    ui.heading("📊 Monitor Tab — Metrics Explained");
+    ui.heading("📊 Monitor Tab - Metrics Explained");
     ui.add_space(4.0);
 
     help_item(ui, "Packet Loss",
@@ -78,15 +78,15 @@ fn render_metrics_section(ui: &mut egui::Ui) {
     help_item(ui, "Jitter",
         "Average variation between consecutive pings.\n\
          Formula: mean of |latency[n] - latency[n-1]|\n\
-         High jitter means inconsistent connection — bad for gaming, VoIP, video calls.\n\
+         High jitter means inconsistent connection - bad for gaming, VoIP, video calls.\n\
          🟢 < 5ms = Stable  🟡 5-20ms = Noticeable  🔴 > 20ms = Unstable");
 
     help_item(ui, "Connection Verdict",
         "Overall quality rating based on packet loss AND average latency:\n\
-         • Excellent — loss < 1% and avg < 50ms\n\
-         • Good — loss < 5% and avg < 100ms\n\
-         • Fair — loss < 15%\n\
-         • Poor — loss ≥ 15%");
+         • Excellent - loss < 1% and avg < 50ms\n\
+         • Good - loss < 5% and avg < 100ms\n\
+         • Fair - loss < 15%\n\
+         • Poor - loss >= 15%");
 }
 
 fn render_chart_section(ui: &mut egui::Ui) {
@@ -115,7 +115,7 @@ fn render_chart_section(ui: &mut egui::Ui) {
 }
 
 fn render_diagnosis_section(ui: &mut egui::Ui) {
-    ui.heading("🏥 Gateway Diagnosis — How It Works");
+    ui.heading("🏥 Gateway Diagnosis - How It Works");
     ui.add_space(4.0);
 
     ui.label("When gateway monitoring is enabled, the app pings both your router \
@@ -135,7 +135,7 @@ fn render_diagnosis_section(ui: &mut egui::Ui) {
 
     help_item(ui, "ISP / Route Issue",
         "Gateway loss is fine (< 2%) but external loss is above 2%.\n\
-         Your local network is healthy — the problem is between your router and the target.\n\
+         Your local network is healthy - the problem is between your router and the target.\n\
          Causes: ISP congestion, routing problems, target server issues.\n\
          Fix: Contact ISP, try a different target, test at different times.");
 

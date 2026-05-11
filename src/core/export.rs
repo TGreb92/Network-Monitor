@@ -1,4 +1,4 @@
-//! # Export — CSV, JSON, ISP report, and console log writers
+//! # Export - CSV, JSON, ISP report, and console log writers
 //!
 //! Writes ping results, interval reports, human-readable ISP reports,
 //! and raw console logs to files next to the executable.
@@ -105,8 +105,7 @@ pub fn write_isp_report(path: &std::path::Path, state: &PingState) -> std::io::R
     writeln!(file)?;
 
     // Gateway diagnosis if available
-    if state.gateway.enabled && state.gateway.ip.is_some() {
-        let gw_ip = state.gateway.ip.as_deref().unwrap_or("unknown");
+    if let Some(gw_ip) = state.gateway.enabled.then(|| state.gateway.ip.as_deref()).flatten() {
         let gw_lost = state.gateway.total_sent - state.gateway.total_received;
         writeln!(file, "--- GATEWAY ANALYSIS ---")?;
         writeln!(file)?;
@@ -124,7 +123,7 @@ pub fn write_isp_report(path: &std::path::Path, state: &PingState) -> std::io::R
         } else if ext_loss > 2.0 {
             writeln!(file, "  DIAGNOSIS: ISP or routing issue detected.")?;
             writeln!(file, "  Local network is stable (gateway loss {:.1}%), but", gw_loss)?;
-            writeln!(file, "  external target shows {:.1}% loss — the problem is", ext_loss)?;
+            writeln!(file, "  external target shows {:.1}% loss - the problem is", ext_loss)?;
             writeln!(file, "  between the router and the destination.")?;
         } else {
             writeln!(file, "  DIAGNOSIS: No issues detected. Both local and external")?;
@@ -157,7 +156,7 @@ pub fn write_isp_report(path: &std::path::Path, state: &PingState) -> std::io::R
         writeln!(file)?;
     }
 
-    // Loss timeline — show when drops happened
+    // Loss timeline - show when drops happened
     let loss_periods = find_loss_periods(state);
     if !loss_periods.is_empty() {
         writeln!(file, "--- LOSS TIMELINE ---")?;
@@ -181,7 +180,7 @@ pub fn write_isp_report(path: &std::path::Path, state: &PingState) -> std::io::R
 /// Write the raw console log output to a file
 pub fn write_console_log(path: &std::path::Path, state: &PingState) -> std::io::Result<()> {
     let mut file = std::fs::File::create(path)?;
-    writeln!(file, "Ping log — {} — target: {}", 
+    writeln!(file, "Ping log - {} - target: {}", 
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
         state.config.target)?;
     writeln!(file)?;
@@ -371,19 +370,18 @@ struct JsonIntervalReport {
 pub fn write_json(path: &std::path::Path, state: &PingState) -> std::io::Result<()> {
     let min = state.min_latency();
 
-    let gateway = if state.gateway.enabled && state.gateway.ip.is_some() {
-        Some(JsonGateway {
-            ip: state.gateway.ip.clone().unwrap_or_default(),
+    let gateway = state.gateway.enabled
+        .then(|| state.gateway.ip.as_ref())
+        .flatten()
+        .map(|ip| JsonGateway {
+            ip: ip.clone(),
             total_sent: state.gateway.total_sent,
             total_received: state.gateway.total_received,
             packet_loss_pct: round1(state.gateway.packet_loss_pct()),
             avg_latency_ms: round1(state.gateway.avg_latency()),
             avg_jitter_ms: round1(state.gateway.jitter.avg()),
             latencies: state.gateway.all_latencies.iter().map(|lat| round1(*lat)).collect(),
-        })
-    } else {
-        None
-    };
+        });
 
     let export = JsonExport {
         test_info: JsonTestInfo {

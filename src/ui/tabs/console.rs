@@ -1,4 +1,4 @@
-//! # Console Tab — Live ping log
+//! # Console Tab - Live ping log
 //!
 //! Scrolling log of individual ping results with color coding
 //! and auto-scroll toggle.

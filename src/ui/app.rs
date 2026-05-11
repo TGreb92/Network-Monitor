@@ -1,4 +1,4 @@
-//! # App — Main application struct and tab routing
+//! # App - Main application struct and tab routing
 //!
 //! Owns all component state and delegates rendering to each module.
 
@@ -21,7 +21,7 @@ enum Tab {
     Help,
 }
 
-/// Main application struct — owns shared state and all component state
+/// Main application struct - owns shared state and all component state
 pub struct NetworkMonitorApp {
     state: SharedState,
     active_tab: Tab,

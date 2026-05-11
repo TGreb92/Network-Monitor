@@ -25,7 +25,7 @@ pub const MAX_JITTER: usize = 7200;
 pub struct PingConfig {
     /// Hostname or IP address to ping (e.g. "8.8.8.8", "google.com")
     pub target: String,
-    /// Ping timeout in milliseconds — how long to wait for a reply
+    /// Ping timeout in milliseconds - how long to wait for a reply
     pub timeout_ms: u32,
     /// How often (in seconds) to generate an interval summary report
     pub interval_secs: u64,
@@ -319,13 +319,9 @@ impl PingState {
     }
 
     pub fn elapsed_display(&self) -> String {
-        match self.start_time {
-            Some(start) => {
-                let total_secs = start.elapsed().as_secs();
-                format!("{}m {}s", total_secs / 60, total_secs % 60)
-            }
-            None => "—".to_string(),
-        }
+        let Some(start) = self.start_time else { return "-".to_string() };
+        let total_secs = start.elapsed().as_secs();
+        format!("{}m {}s", total_secs / 60, total_secs % 60)
     }
 
     pub fn elapsed_secs(&self) -> f64 {

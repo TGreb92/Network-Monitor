@@ -1,4 +1,4 @@
-//! # Monitor Tab — Data visualization
+//! # Monitor Tab - Data visualization
 //!
 //! Renders the Monitor tab: external stats, gateway health, latency chart
 //! with selectable time window, and interval reports table.
@@ -205,18 +205,16 @@ fn format_nearest_tooltip(visible_results: &[(f64, Option<f64>, bool)], cursor_t
         dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    match nearest {
-        Some((elapsed, latency, success)) => {
-            let total_secs = *elapsed as u64;
-            let mins = total_secs / 60;
-            let secs = total_secs % 60;
-            if *success {
-                format!("⏱ {}:{:02}\n📶 {:.1} ms", mins, secs, latency.unwrap_or(0.0))
-            } else {
-                format!("⏱ {}:{:02}\n❌ Timeout", mins, secs)
-            }
-        }
-        None => "No data".to_string(),
+    let Some((elapsed, latency, success)) = nearest else {
+        return "No data".to_string();
+    };
+    let total_secs = *elapsed as u64;
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    if *success {
+        format!("⏱ {}:{:02}\n📶 {:.1} ms", mins, secs, latency.unwrap_or(0.0))
+    } else {
+        format!("⏱ {}:{:02}\n❌ Timeout", mins, secs)
     }
 }
 

@@ -1,4 +1,4 @@
-//! # Preset Manager — CRUD for target presets
+//! # Preset Manager - CRUD for target presets
 //!
 //! Collapsible list with add/edit/delete for named target presets.
 

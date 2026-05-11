@@ -1,9 +1,9 @@
-//! # Network Monitor — Entry Point
+//! # Network Monitor - Entry Point
 //!
 //! Loads config, creates shared state, launches the GUI.
 //! Pinger threads are spawned after the window is created.
 
-// Build as a Windows GUI app — no console window at all.
+// Build as a Windows GUI app - no console window at all.
 // Only in release builds so `cargo run` still shows a console for debugging.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -32,7 +32,7 @@ fn main() -> eframe::Result<()> {
         "Network Monitor",
         options,
         Box::new(move |cc| {
-            // Do NOT spawn threads here — let the window render first.
+            // Do NOT spawn threads here - let the window render first.
             // Threads are spawned on the first frame via App::update().
             Ok(Box::new(ui::app::NetworkMonitorApp::new(state_clone, cc)))
         }),

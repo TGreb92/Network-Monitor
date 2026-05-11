@@ -1,4 +1,4 @@
-//! # Tabs — one module per application tab
+//! # Tabs - one module per application tab
 //!
 //! Each tab has its own state struct and render function.
 

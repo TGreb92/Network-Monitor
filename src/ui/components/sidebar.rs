@@ -1,4 +1,4 @@
-//! # Sidebar — Controls panel
+//! # Sidebar - Controls panel
 //!
 //! Target selector, Start/Stop, gateway detection, quick stats, and export.
 
@@ -171,9 +171,10 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut Sideb
 fn render_gateway(ui: &mut egui::Ui, state: &SharedState, snap: &SidebarSnapshot) {
     ui.heading("🌐 Gateway");
 
-    match &snap.gateway_ip {
-        Some(ip) => { ui.label(format!("Detected: {}", ip)); }
-        None => { ui.label("Not detected"); }
+    if let Some(ip) = &snap.gateway_ip {
+        ui.label(format!("Detected: {}", ip));
+    } else {
+        ui.label("Not detected");
     }
 
     if ui.button("🔍 Detect").clicked() {

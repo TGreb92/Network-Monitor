@@ -1,4 +1,4 @@
-//! # Components — shared UI building blocks
+//! # Components - shared UI building blocks
 //!
 //! Reusable widgets and panels used across multiple tabs.
 
