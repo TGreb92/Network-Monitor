@@ -362,12 +362,13 @@ fn show_loss_notification(_ctx: &egui::Context, target: &str, loss_count: u64) {
         chrono::Local::now().format("%H:%M:%S"),
     );
 
-    // Spawn in a thread so it doesn't block the GUI
-    std::thread::spawn(move || {
-        let _ = notify_rust::Notification::new()
-            .summary("Network Monitor - Loss Detected")
-            .body(&body)
-            .timeout(notify_rust::Timeout::Milliseconds(5000))
-            .show();
-    });
+    // Call directly on the UI thread - toast notifications are non-blocking,
+    // they just register with Windows and return immediately.
+    // Spawning a thread here would initialize COM with the wrong threading
+    // model, corrupting the window message pump and preventing focus.
+    let _ = notify_rust::Notification::new()
+        .summary("Network Monitor - Loss Detected")
+        .body(&body)
+        .timeout(notify_rust::Timeout::Milliseconds(5000))
+        .show();
 }
