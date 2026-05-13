@@ -7,6 +7,7 @@
 pub mod config;
 pub mod export;
 pub mod import;
+pub mod modem_health;
 pub mod models;
 pub mod pinger;
 

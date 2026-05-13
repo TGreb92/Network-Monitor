@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::core::config;
 use crate::core::pinger;
-use crate::core::state::{PingConfig, SharedState, lock_state};
+use crate::core::state::{PingConfig, SharedState, ShutdownSignal, lock_state};
 use crate::ui::tabs::config::ConfigState;
 use crate::ui::tabs::console::{self, ConsoleState};
 use crate::ui::tabs::monitor::{self, MonitorState};
@@ -35,6 +35,10 @@ pub struct NetworkMonitorApp {
     config_tab: ConfigState,
     monitor: MonitorState,
     tray: TrayState,
+    /// Shutdown signals for background threads
+    pinger_shutdown: Option<ShutdownSignal>,
+    gateway_shutdown: Option<ShutdownSignal>,
+    modem_health_shutdown: Option<ShutdownSignal>,
     /// Frame counter for startup sequence; None after startup completes
     startup_frames_remaining: Option<u32>,
 }
@@ -47,6 +51,12 @@ impl NetworkMonitorApp {
             let mut shared = lock_state(&state);
             shared.config = PingConfig::from_saved(&saved);
             shared.gateway.enabled = saved.gateway_enabled;
+            shared.modem_health_enabled = saved.modem_health_enabled;
+            shared.modem_health_url = saved.modem_health_url.clone();
+            shared.modem_health_interval_secs = saved.modem_health_interval_secs;
+            if saved.modem_health_enabled {
+                shared.modem_http_status = crate::core::state::ModemHttpStatus::Unknown;
+            }
         }
 
         let mut sidebar = SidebarState::new(saved.presets.clone(), saved.selected_preset, saved.export_path.clone());
@@ -61,6 +71,9 @@ impl NetworkMonitorApp {
             config_tab: ConfigState::from_saved(&saved),
             monitor: MonitorState::new(),
             tray: TrayState::new(),
+            pinger_shutdown: None,
+            gateway_shutdown: None,
+            modem_health_shutdown: None,
             startup_frames_remaining: Some(5),
         }
     }
@@ -75,8 +88,12 @@ impl NetworkMonitorApp {
 
         // Spawn threads on frame 3 (window is fully painted by then)
         if remaining == 3 {
-            pinger::start_pinger(self.state.clone());
-            pinger::start_gateway_pinger(self.state.clone());
+            let (_, pinger_sig) = pinger::start_pinger(self.state.clone());
+            let (_, gw_sig) = pinger::start_gateway_pinger(self.state.clone());
+            let (_, modem_sig) = crate::core::modem_health::start_modem_health_checker(self.state.clone());
+            self.pinger_shutdown = Some(pinger_sig);
+            self.gateway_shutdown = Some(gw_sig);
+            self.modem_health_shutdown = Some(modem_sig);
 
             let saved = config::load();
             if saved.auto_detect_gateway {
@@ -92,9 +109,22 @@ impl NetworkMonitorApp {
 
         self.startup_frames_remaining = if remaining <= 1 { None } else { Some(remaining - 1) };
     }
+
+    /// Signal all background threads to shut down
+    fn shutdown_all_threads(&self) {
+        for signal in [&self.pinger_shutdown, &self.gateway_shutdown, &self.modem_health_shutdown] {
+            if let Some(s) = signal {
+                s.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 impl eframe::App for NetworkMonitorApp {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.shutdown_all_threads();
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.startup_sequence(ctx);
 
@@ -125,6 +155,7 @@ impl eframe::App for NetworkMonitorApp {
                 crate::ui::components::tray::hide_window(ctx);
             }
             TrayAction::Exit => {
+                self.shutdown_all_threads();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             TrayAction::None => {}

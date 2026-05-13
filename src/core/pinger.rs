@@ -14,25 +14,32 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::core::state::{PingResult, SharedState, lock_state};
+use crate::core::state::{PingResult, SharedState, ShutdownSignal, lock_state};
 
 /// Windows process creation flag that prevents a console window from being created.
 /// Without this, every `ping.exe` invocation would flash a CMD window.
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 /// Spawn the background pinger thread for the external target.
-pub fn start_pinger(state: SharedState) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        pinger_loop(state);
-    })
+/// Returns (join handle, shutdown signal).
+pub fn start_pinger(state: SharedState) -> (thread::JoinHandle<()>, ShutdownSignal) {
+    let shutdown = crate::core::state::new_shutdown_signal();
+    let signal = shutdown.clone();
+    let handle = thread::spawn(move || {
+        pinger_loop(state, signal);
+    });
+    (handle, shutdown)
 }
 
 /// Spawn a separate background thread that pings the gateway at the same frequency.
-/// Only sends pings when both `running` and `gateway_enabled` are true.
-pub fn start_gateway_pinger(state: SharedState) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        gateway_pinger_loop(state);
-    })
+/// Returns (join handle, shutdown signal).
+pub fn start_gateway_pinger(state: SharedState) -> (thread::JoinHandle<()>, ShutdownSignal) {
+    let shutdown = crate::core::state::new_shutdown_signal();
+    let signal = shutdown.clone();
+    let handle = thread::spawn(move || {
+        gateway_pinger_loop(state, signal);
+    });
+    (handle, shutdown)
 }
 
 /// Detect the default gateway IP by parsing `ipconfig` output on Windows.
@@ -60,8 +67,11 @@ pub fn detect_gateway() -> Option<String> {
 }
 
 /// Main pinger loop. Runs indefinitely, checking the `running` flag each iteration.
-fn pinger_loop(state: SharedState) {
-    loop {
+fn pinger_loop(state: SharedState, shutdown: ShutdownSignal) {
+    while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+        {
+            lock_state(&state).thread_heartbeat_pinger = Some(Instant::now());
+        }
         // Quick check: only read running flag (no String clone)
         let running = {
             let shared = lock_state(&state);
@@ -229,8 +239,11 @@ fn sleep_until_next_ping(ping_start: Instant, ping_interval_ms: u64) {
 
 /// Gateway pinger loop. Pings the gateway IP at the same frequency as the
 /// external target. Only active when gateway_enabled is true.
-fn gateway_pinger_loop(state: SharedState) {
-    loop {
+fn gateway_pinger_loop(state: SharedState, shutdown: ShutdownSignal) {
+    while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+        {
+            lock_state(&state).thread_heartbeat_gateway = Some(Instant::now());
+        }
         let (gateway_ip, timeout_ms, ping_interval_ms, running, enabled) = {
             let shared = lock_state(&state);
             (

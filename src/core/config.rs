@@ -61,11 +61,22 @@ pub struct SavedConfig {
     /// Critical ping threshold in ms
     #[serde(default = "default_critical_threshold")]
     pub threshold_critical_ms: u32,
+    /// Enable modem HTTP health check
+    #[serde(default)]
+    pub modem_health_enabled: bool,
+    /// URL for modem health check (HTTP only)
+    #[serde(default = "default_modem_health_url")]
+    pub modem_health_url: String,
+    /// Seconds between modem health checks
+    #[serde(default = "default_modem_health_interval")]
+    pub modem_health_interval_secs: u32,
 }
 
 fn default_elevated_threshold() -> u32 { 100 }
 fn default_high_threshold() -> u32 { 200 }
 fn default_critical_threshold() -> u32 { 500 }
+fn default_modem_health_url() -> String { "http://192.168.0.1/?status_status".into() }
+fn default_modem_health_interval() -> u32 { 15 }
 
 impl Default for SavedConfig {
     fn default() -> Self {
@@ -91,6 +102,9 @@ impl Default for SavedConfig {
             threshold_elevated_ms: 100,
             threshold_high_ms: 200,
             threshold_critical_ms: 500,
+            modem_health_enabled: false,
+            modem_health_url: default_modem_health_url(),
+            modem_health_interval_secs: 15,
         }
     }
 }

@@ -62,6 +62,30 @@ pub struct PingState {
     pub notify_loss_pending: bool,
     /// Whether loss event notifications are enabled
     pub notify_loss_enabled: bool,
+    /// Timestamps of external loss batches that started while gateway was healthy.
+    /// Used to detect modem CPU struggling (frequent short loss cycles).
+    pub modem_struggle_events: VecDeque<Instant>,
+    /// HTTP health check result for modem
+    pub modem_http_status: ModemHttpStatus,
+    /// Whether modem HTTP health check is enabled
+    pub modem_health_enabled: bool,
+    /// URL to check for modem health
+    pub modem_health_url: String,
+    /// Seconds between health checks
+    pub modem_health_interval_secs: u32,
+    /// Thread alive timestamps - set by each background thread on every iteration
+    pub thread_heartbeat_pinger: Option<Instant>,
+    pub thread_heartbeat_gateway: Option<Instant>,
+    pub thread_heartbeat_modem: Option<Instant>,
+}
+
+/// Modem HTTP health check status
+#[derive(Clone, Debug, PartialEq)]
+pub enum ModemHttpStatus {
+    Disabled,
+    Unknown,
+    Ok,
+    Failed(String),
 }
 
 impl PingState {
@@ -87,6 +111,14 @@ impl PingState {
             auto_export_pending: false,
             notify_loss_pending: false,
             notify_loss_enabled: false,
+            modem_struggle_events: VecDeque::with_capacity(32),
+            modem_http_status: ModemHttpStatus::Disabled,
+            modem_health_enabled: false,
+            modem_health_url: String::new(),
+            modem_health_interval_secs: 15,
+            thread_heartbeat_pinger: None,
+            thread_heartbeat_gateway: None,
+            thread_heartbeat_modem: None,
         }
     }
 
@@ -95,6 +127,18 @@ impl PingState {
         let new_loss_batch = self.loss_tracker.record(result.success);
         if new_loss_batch && self.notify_loss_enabled {
             self.notify_loss_pending = true;
+        }
+
+        // Track external loss batches that start while gateway is healthy
+        if new_loss_batch
+            && self.gateway.enabled
+            && self.gateway.total_sent >= 10
+            && self.gateway.recent_loss_pct() < 1.0
+        {
+            self.modem_struggle_events.push_back(Instant::now());
+            if self.modem_struggle_events.len() > 32 {
+                self.modem_struggle_events.pop_front();
+            }
         }
 
         self.ping_tiers.record(result.latency_ms, &self.thresholds);
@@ -132,6 +176,12 @@ impl PingState {
         if window.is_empty() { return 0.0; }
         let failed = window.iter().filter(|&&s| !s).count();
         (failed as f64 / window.len() as f64) * 100.0
+    }
+
+    /// Count modem struggle events (external loss while gateway healthy) in the last N minutes
+    pub fn modem_struggle_count(&self, minutes: u64) -> usize {
+        let cutoff = Instant::now() - std::time::Duration::from_secs(minutes * 60);
+        self.modem_struggle_events.iter().filter(|&&t| t > cutoff).count()
     }
 
     pub fn avg_latency(&self) -> f64 {
@@ -192,6 +242,7 @@ impl PingState {
         self.interval.reset();
         self.auto_export_pending = false;
         self.notify_loss_pending = false;
+        self.modem_struggle_events.clear();
     }
 
     /// Stop the test, flushing any partial interval report.
@@ -259,9 +310,17 @@ pub fn build_interval_report(
 /// Thread-safe shared state handle.
 pub type SharedState = Arc<Mutex<PingState>>;
 
+/// Signal for cleanly shutting down background threads.
+pub type ShutdownSignal = Arc<std::sync::atomic::AtomicBool>;
+
 /// Create a new shared state wrapped in Arc<Mutex<>> for cross-thread access
 pub fn new_shared_state(config: PingConfig) -> SharedState {
     Arc::new(Mutex::new(PingState::new(config)))
+}
+
+/// Create a new shutdown signal
+pub fn new_shutdown_signal() -> ShutdownSignal {
+    Arc::new(std::sync::atomic::AtomicBool::new(false))
 }
 
 /// Lock shared state, recovering from poison with a warning.

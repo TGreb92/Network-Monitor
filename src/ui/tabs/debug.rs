@@ -10,19 +10,23 @@ use crate::ui::components::notifications;
 
 /// Render the Debug tab contents
 pub fn render(ui: &mut egui::Ui, state: &SharedState) {
-    ui.heading("🔧 Debug Tools");
-    ui.label("Use these to test notifications and simulate events without waiting for real network issues.");
-    ui.add_space(8.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            ui.heading("🔧 Debug Tools");
+            ui.label("Use these to test notifications and simulate events without waiting for real network issues.");
+            ui.add_space(8.0);
 
-    render_toast_tests(ui);
-    ui.add_space(12.0);
-    ui.separator();
-    ui.add_space(8.0);
-    render_simulate_events(ui, state);
-    ui.add_space(12.0);
-    ui.separator();
-    ui.add_space(8.0);
-    render_state_inspector(ui, state);
+            render_toast_tests(ui);
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+            render_simulate_events(ui, state);
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+            render_state_inspector(ui, state);
+        });
 }
 
 fn render_toast_tests(ui: &mut egui::Ui) {
@@ -186,5 +190,25 @@ fn snapshot_state_info(state: &PingState) -> Vec<(&'static str, String)> {
         ("Gateway enabled", state.gateway.enabled.to_string()),
         ("Gateway IP", state.gateway.ip.as_deref().unwrap_or("-").to_string()),
         ("Config target", state.config.target.clone()),
+        ("Modem HTTP", format!("{:?}", state.modem_http_status)),
+        ("Modem struggle (10m)", state.modem_struggle_count(10).to_string()),
+        ("Thread: Pinger", heartbeat_status(state.thread_heartbeat_pinger, state.running)),
+        ("Thread: Gateway", heartbeat_status(state.thread_heartbeat_gateway, state.gateway.enabled && state.running)),
+        ("Thread: Modem HTTP", heartbeat_status(state.thread_heartbeat_modem, state.modem_health_enabled)),
     ]
+}
+
+fn heartbeat_status(heartbeat: Option<std::time::Instant>, active: bool) -> String {
+    match heartbeat {
+        None => "Not started".into(),
+        Some(t) => {
+            let ago = t.elapsed().as_secs_f64();
+            if ago < 5.0 {
+                if active { format!("Running ({:.1}s ago)", ago) }
+                else { format!("Idle ({:.1}s ago)", ago) }
+            } else {
+                format!("Stale ({:.0}s ago)", ago)
+            }
+        }
+    }
 }

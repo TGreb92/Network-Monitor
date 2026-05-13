@@ -32,6 +32,9 @@ pub struct ConfigState {
     pub threshold_elevated: u32,
     pub threshold_high: u32,
     pub threshold_critical: u32,
+    pub modem_health_enabled: bool,
+    pub modem_health_url: String,
+    pub modem_health_interval: u32,
     pub status: Option<(String, Instant)>,
     pub preset_editor: PresetEditorState,
 }
@@ -58,6 +61,9 @@ impl ConfigState {
             threshold_elevated: saved.threshold_elevated_ms,
             threshold_high: saved.threshold_high_ms,
             threshold_critical: saved.threshold_critical_ms,
+            modem_health_enabled: saved.modem_health_enabled,
+            modem_health_url: saved.modem_health_url.clone(),
+            modem_health_interval: saved.modem_health_interval_secs,
             status: None,
             preset_editor: PresetEditorState::new(),
         }
@@ -96,6 +102,17 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
     sidebar.notifications.threshold_elevated_ms = cfg.threshold_elevated;
     sidebar.notifications.threshold_high_ms = cfg.threshold_high;
     sidebar.notifications.threshold_critical_ms = cfg.threshold_critical;
+
+    // Sync modem health config to shared state
+    {
+        let mut shared = lock_state(state);
+        shared.modem_health_enabled = cfg.modem_health_enabled;
+        shared.modem_health_url = cfg.modem_health_url.clone();
+        shared.modem_health_interval_secs = cfg.modem_health_interval;
+        if !cfg.modem_health_enabled {
+            shared.modem_http_status = crate::core::state::ModemHttpStatus::Disabled;
+        }
+    }
 }
 
 fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
@@ -191,6 +208,19 @@ fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
     if cfg.threshold_critical < cfg.threshold_high {
         cfg.threshold_critical = cfg.threshold_high;
     }
+
+    ui.add_space(8.0);
+    ui.heading("🔌 Modem Health Check");
+    ui.add_space(4.0);
+    ui.checkbox(&mut cfg.modem_health_enabled, "Enable HTTP health check");
+    ui.label("URL (HTTP only):");
+    ui.text_edit_singleline(&mut cfg.modem_health_url);
+    ui.horizontal(|ui| {
+        ui.label("Check interval:");
+        ui.add(egui::DragValue::new(&mut cfg.modem_health_interval)
+            .range(5..=120)
+            .suffix(" s").speed(1));
+    });
 }
 
 fn render_buttons(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
@@ -252,6 +282,9 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut Side
         threshold_elevated_ms: cfg.threshold_elevated,
         threshold_high_ms: cfg.threshold_high,
         threshold_critical_ms: cfg.threshold_critical,
+        modem_health_enabled: cfg.modem_health_enabled,
+        modem_health_url: cfg.modem_health_url.clone(),
+        modem_health_interval_secs: cfg.modem_health_interval,
     };
     match config::save(&saved) {
         Ok(()) => cfg.status = Some(("✅ Config saved".into(), Instant::now())),
