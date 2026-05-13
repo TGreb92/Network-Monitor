@@ -4,6 +4,7 @@
 
 pub mod config;
 pub mod console;
+#[cfg(debug_assertions)]
 pub mod debug;
 pub mod help;
 pub mod monitor;

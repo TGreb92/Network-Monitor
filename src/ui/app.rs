@@ -13,6 +13,7 @@ use crate::ui::tabs::monitor::{self, MonitorState};
 use crate::ui::components::sidebar::{self, SidebarState};
 use crate::ui::components::tray::{TrayState, TrayAction};
 use crate::ui::tabs::help;
+#[cfg(debug_assertions)]
 use crate::ui::tabs::debug;
 
 #[derive(PartialEq)]
@@ -21,6 +22,7 @@ enum Tab {
     Console,
     Config,
     Help,
+    #[cfg(debug_assertions)]
     Debug,
 }
 
@@ -148,6 +150,7 @@ impl eframe::App for NetworkMonitorApp {
                 ui.selectable_value(&mut self.active_tab, Tab::Console, "🖥 Console");
                 ui.selectable_value(&mut self.active_tab, Tab::Config, "⚙ Config");
                 ui.selectable_value(&mut self.active_tab, Tab::Help, "❓ Help");
+                #[cfg(debug_assertions)]
                 ui.selectable_value(&mut self.active_tab, Tab::Debug, "🔧 Debug");
             });
             ui.separator();
@@ -160,6 +163,7 @@ impl eframe::App for NetworkMonitorApp {
                 Tab::Console => console::render(ui, &self.state, &mut self.console),
                 Tab::Config => crate::ui::tabs::config::render(ui, &self.state, &mut self.config_tab, &mut self.sidebar),
                 Tab::Help => help::render(ui),
+                #[cfg(debug_assertions)]
                 Tab::Debug => debug::render(ui, &self.state),
             }
         });

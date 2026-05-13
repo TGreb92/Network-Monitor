@@ -205,18 +205,4 @@ impl TieredPingTracker {
             }
         }
     }
-
-    /// Drain all pending tier notifications. Returns (tier, count, threshold_ms)
-    /// for each tier that has a pending notification, clearing the flags.
-    pub fn drain_pending(&mut self, thresholds: &PingThresholds) -> Vec<(PingTier, u64, u32)> {
-        let mut pending = Vec::new();
-        for &tier in &LATENCY_TIERS {
-            let state = &mut self.tiers[tier.index()];
-            if state.notify_pending && state.notify_enabled {
-                state.notify_pending = false;
-                pending.push((tier, state.tracker.count, tier.threshold(thresholds) as u32));
-            }
-        }
-        pending
-    }
 }

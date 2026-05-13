@@ -164,7 +164,8 @@ fn show_toast(_ctx: &egui::Context, summary: &str, body: &str) {
         .show();
 }
 
-/// Fire a toast notification directly. Public for use by the Debug tab.
+/// Fire a toast notification directly. Only available in debug builds.
+#[cfg(debug_assertions)]
 pub fn fire_toast(summary: &str, body: &str) {
     let _ = notify_rust::Notification::new()
         .summary(&format!("Network Monitor - {}", summary))
