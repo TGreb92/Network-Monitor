@@ -43,6 +43,9 @@ impl JitterTracker {
     }
 }
 
+/// Maximum number of recent results to track for rolling loss calculation
+const RECENT_WINDOW: usize = 30;
+
 /// Gateway ping statistics
 #[derive(Clone)]
 pub struct GatewayStats {
@@ -52,6 +55,12 @@ pub struct GatewayStats {
     pub total_received: u64,
     pub all_latencies: VecDeque<f64>,
     pub jitter: JitterTracker,
+    /// Rolling window of recent success/fail for diagnosis
+    recent_results: VecDeque<bool>,
+    /// Tracks gateway loss batches for notifications
+    pub loss_tracker: LossBatchTracker,
+    pub notify_loss_pending: bool,
+    pub notify_loss_enabled: bool,
 }
 
 impl GatewayStats {
@@ -63,6 +72,10 @@ impl GatewayStats {
             total_received: 0,
             all_latencies: VecDeque::with_capacity(MAX_LATENCIES),
             jitter: JitterTracker::new(),
+            recent_results: VecDeque::with_capacity(RECENT_WINDOW),
+            loss_tracker: LossBatchTracker::new(),
+            notify_loss_pending: false,
+            notify_loss_enabled: false,
         }
     }
 
@@ -78,12 +91,28 @@ impl GatewayStats {
             }
             self.all_latencies.push_back(lat);
         }
+        if self.recent_results.len() >= RECENT_WINDOW {
+            self.recent_results.pop_front();
+        }
+        self.recent_results.push_back(success);
+
+        let new_batch = self.loss_tracker.record(success);
+        if new_batch && self.notify_loss_enabled {
+            self.notify_loss_pending = true;
+        }
     }
 
     pub fn packet_loss_pct(&self) -> f64 {
         if self.total_sent == 0 { return 0.0; }
         let lost = self.total_sent - self.total_received;
         (lost as f64 / self.total_sent as f64) * 100.0
+    }
+
+    /// Recent loss percentage over the last ~30 pings
+    pub fn recent_loss_pct(&self) -> f64 {
+        if self.recent_results.is_empty() { return 0.0; }
+        let failed = self.recent_results.iter().filter(|&&s| !s).count();
+        (failed as f64 / self.recent_results.len() as f64) * 100.0
     }
 
     pub fn avg_latency(&self) -> f64 {
@@ -96,6 +125,9 @@ impl GatewayStats {
         self.total_received = 0;
         self.all_latencies.clear();
         self.jitter.reset();
+        self.recent_results.clear();
+        self.loss_tracker.reset();
+        self.notify_loss_pending = false;
     }
 }
 

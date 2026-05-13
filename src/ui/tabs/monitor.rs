@@ -77,10 +77,10 @@ fn render_gateway_stats(ui: &mut egui::Ui, state: &PingState) {
     let gw_ip = state.gateway.ip.as_deref().unwrap_or("?");
     ui.heading(format!("🌐 Gateway: {}", gw_ip));
     ui.horizontal_wrapped(|ui| {
-        let gw_loss = state.gateway.packet_loss_pct();
+        let gw_loss = state.gateway.recent_loss_pct();
         let gw_avg = state.gateway.avg_latency();
         let gw_jitter = state.gateway.jitter.avg();
-        let ext_loss = state.packet_loss_pct();
+        let ext_loss = state.recent_loss_pct();
 
         stat_card(ui, "GW Loss", &format!("{:.1}%", gw_loss), loss_color(gw_loss));
         stat_card(ui, "GW Avg", &format!("{:.1} ms", gw_avg), latency_color(gw_avg));

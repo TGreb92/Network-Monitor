@@ -126,6 +126,14 @@ impl PingState {
         (lost as f64 / self.total_sent as f64) * 100.0
     }
 
+    /// Recent loss percentage over the last ~30 pings
+    pub fn recent_loss_pct(&self) -> f64 {
+        let window: Vec<bool> = self.results.iter().rev().take(30).map(|r| r.success).collect();
+        if window.is_empty() { return 0.0; }
+        let failed = window.iter().filter(|&&s| !s).count();
+        (failed as f64 / window.len() as f64) * 100.0
+    }
+
     pub fn avg_latency(&self) -> f64 {
         if self.all_latencies.is_empty() { return 0.0; }
         self.all_latencies.iter().sum::<f64>() / self.all_latencies.len() as f64

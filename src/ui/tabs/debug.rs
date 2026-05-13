@@ -79,6 +79,20 @@ fn render_simulate_events(ui: &mut egui::Ui, state: &SharedState) {
             inject_ping(state, None, false);
         }
     });
+
+    ui.add_space(4.0);
+    ui.label("Gateway:");
+    ui.horizontal(|ui| {
+        if ui.button("GW OK (2ms)").clicked() {
+            inject_gateway_ping(state, Some(2.0), true);
+        }
+        if ui.button("GW Slow (50ms)").clicked() {
+            inject_gateway_ping(state, Some(50.0), true);
+        }
+        if ui.button("GW Timeout").clicked() {
+            inject_gateway_ping(state, None, false);
+        }
+    });
 }
 
 fn inject_ping(state: &SharedState, latency_ms: Option<f64>, success: bool) {
@@ -112,6 +126,17 @@ fn inject_ping(state: &SharedState, latency_ms: Option<f64>, success: bool) {
         format!("[{}] #{} [DEBUG] Simulated timeout", now.format("%H:%M:%S"), seq)
     };
     shared.push_log(log_msg, latency_ms, success);
+}
+
+fn inject_gateway_ping(state: &SharedState, latency_ms: Option<f64>, success: bool) {
+    let mut shared = lock_state(state);
+    if !shared.gateway.enabled {
+        shared.gateway.enabled = true;
+        if shared.gateway.ip.is_none() {
+            shared.gateway.ip = Some("192.168.0.1 (simulated)".into());
+        }
+    }
+    shared.gateway.push_result(latency_ms, success);
 }
 
 fn render_state_inspector(ui: &mut egui::Ui, state: &SharedState) {

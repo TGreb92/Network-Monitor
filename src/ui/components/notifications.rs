@@ -16,6 +16,7 @@ const TOAST_COOLDOWN_SECS: f64 = 5.0;
 /// Notification preferences (persisted via config)
 pub struct NotificationState {
     pub notify_on_loss: bool,
+    pub notify_on_gw_loss: bool,
     pub notify_on_elevated_ping: bool,
     pub notify_on_high_ping: bool,
     pub notify_on_critical_ping: bool,
@@ -33,6 +34,7 @@ impl NotificationState {
     pub fn new() -> Self {
         Self {
             notify_on_loss: false,
+            notify_on_gw_loss: false,
             notify_on_elevated_ping: false,
             notify_on_high_ping: false,
             notify_on_critical_ping: false,
@@ -48,6 +50,7 @@ impl NotificationState {
     pub fn from_saved(saved: &crate::core::config::SavedConfig) -> Self {
         Self {
             notify_on_loss: saved.notify_on_loss,
+            notify_on_gw_loss: saved.notify_on_gw_loss,
             notify_on_elevated_ping: saved.notify_on_elevated_ping,
             notify_on_high_ping: saved.notify_on_high_ping,
             notify_on_critical_ping: saved.notify_on_critical_ping,
@@ -68,6 +71,7 @@ pub fn sync_and_fire(ctx: &egui::Context, state: &SharedState, notif: &mut Notif
 
     // Push config into shared state so the pinger can set pending flags
     shared.notify_loss_enabled = notif.notify_on_loss;
+    shared.gateway.notify_loss_enabled = notif.notify_on_gw_loss;
     shared.thresholds = PingThresholds {
         elevated_ms: notif.threshold_elevated_ms as f64,
         high_ms: notif.threshold_high_ms as f64,
@@ -79,6 +83,7 @@ pub fn sync_and_fire(ctx: &egui::Context, state: &SharedState, notif: &mut Notif
 
     if notif.muted {
         shared.notify_loss_pending = false;
+        shared.gateway.notify_loss_pending = false;
         shared.ping_tiers.reset_pending();
         return;
     }
@@ -111,7 +116,7 @@ pub fn sync_and_fire(ctx: &egui::Context, state: &SharedState, notif: &mut Notif
         }
     }
 
-    // Loss is highest priority
+    // Loss is highest priority (external and gateway)
     if shared.notify_loss_pending && shared.notify_loss_enabled {
         severity = PingTier::Loss;
         let count = shared.loss_tracker.count;
@@ -121,14 +126,27 @@ pub fn sync_and_fire(ctx: &egui::Context, state: &SharedState, notif: &mut Notif
         )));
     }
 
+    if shared.gateway.notify_loss_pending && shared.gateway.notify_loss_enabled {
+        let gw_ip = shared.gateway.ip.as_deref().unwrap_or("gateway").to_string();
+        let count = shared.gateway.loss_tracker.count;
+        // Only override if we haven't already queued an external loss
+        if severity < PingTier::Loss {
+            severity = PingTier::Loss;
+        }
+        toast = Some(("Gateway Loss".to_string(), format!(
+            "Gateway loss #{} on {}\nStarted at {}",
+            count, gw_ip, chrono::Local::now().format("%H:%M:%S"),
+        )));
+    }
+
     // Fire if: cooldown expired, OR this is higher severity than the last toast
     let should_fire = severity > PingTier::Normal
         && (!in_cooldown || severity > notif.last_toast_severity);
 
     if should_fire {
-        // NOW clear the consumed flags
         if severity == PingTier::Loss {
             shared.notify_loss_pending = false;
+            shared.gateway.notify_loss_pending = false;
         }
         shared.ping_tiers.clear_pending_up_to(severity);
     }

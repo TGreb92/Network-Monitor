@@ -40,6 +40,9 @@ pub struct SavedConfig {
     /// Show a popup notification when a loss event starts
     #[serde(default)]
     pub notify_on_loss: bool,
+    /// Toast on gateway loss event
+    #[serde(default)]
+    pub notify_on_gw_loss: bool,
     /// Toast on elevated ping (>= elevated threshold)
     #[serde(default)]
     pub notify_on_elevated_ping: bool,
@@ -81,6 +84,7 @@ impl Default for SavedConfig {
             auto_export_isp: false,
             auto_export_log: false,
             notify_on_loss: false,
+            notify_on_gw_loss: false,
             notify_on_elevated_ping: false,
             notify_on_high_ping: false,
             notify_on_critical_ping: false,

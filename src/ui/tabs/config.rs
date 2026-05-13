@@ -25,6 +25,7 @@ pub struct ConfigState {
     pub auto_export_isp: bool,
     pub auto_export_log: bool,
     pub notify_on_loss: bool,
+    pub notify_on_gw_loss: bool,
     pub notify_on_elevated_ping: bool,
     pub notify_on_high_ping: bool,
     pub notify_on_critical_ping: bool,
@@ -50,6 +51,7 @@ impl ConfigState {
             auto_export_isp: saved.auto_export_isp,
             auto_export_log: saved.auto_export_log,
             notify_on_loss: saved.notify_on_loss,
+            notify_on_gw_loss: saved.notify_on_gw_loss,
             notify_on_elevated_ping: saved.notify_on_elevated_ping,
             notify_on_high_ping: saved.notify_on_high_ping,
             notify_on_critical_ping: saved.notify_on_critical_ping,
@@ -64,17 +66,21 @@ impl ConfigState {
 
 /// Render the Config tab contents
 pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
-    ui.heading("⚙ Configuration");
-    ui.add_space(8.0);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            ui.heading("⚙ Configuration");
+            ui.add_space(8.0);
 
-    presets::render(ui, &mut cfg.preset_editor, sidebar);
-    ui.add_space(12.0);
-    ui.separator();
-    ui.add_space(8.0);
-    render_fields(ui, cfg);
-    ui.add_space(12.0);
-    render_buttons(ui, state, cfg, sidebar);
-    render_status(ui, cfg);
+            presets::render(ui, &mut cfg.preset_editor, sidebar);
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(8.0);
+            render_fields(ui, cfg);
+            ui.add_space(12.0);
+            render_buttons(ui, state, cfg, sidebar);
+            render_status(ui, cfg);
+        });
 
     // Sync export settings to sidebar so exports use the latest values
     sidebar.exports.export_path = cfg.export_path.clone();
@@ -83,6 +89,7 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
     sidebar.exports.auto_export_isp = cfg.auto_export_isp;
     sidebar.exports.auto_export_log = cfg.auto_export_log;
     sidebar.notifications.notify_on_loss = cfg.notify_on_loss;
+    sidebar.notifications.notify_on_gw_loss = cfg.notify_on_gw_loss;
     sidebar.notifications.notify_on_elevated_ping = cfg.notify_on_elevated_ping;
     sidebar.notifications.notify_on_high_ping = cfg.notify_on_high_ping;
     sidebar.notifications.notify_on_critical_ping = cfg.notify_on_critical_ping;
@@ -153,6 +160,7 @@ fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
     ui.heading("🔔 Notifications");
     ui.add_space(4.0);
     ui.checkbox(&mut cfg.notify_on_loss, "Toast on loss event");
+    ui.checkbox(&mut cfg.notify_on_gw_loss, "Toast on gateway loss");
 
     ui.add_space(4.0);
     ui.label("Latency tiers:");
@@ -237,6 +245,7 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut Side
         auto_export_isp: cfg.auto_export_isp,
         auto_export_log: cfg.auto_export_log,
         notify_on_loss: cfg.notify_on_loss,
+        notify_on_gw_loss: cfg.notify_on_gw_loss,
         notify_on_elevated_ping: cfg.notify_on_elevated_ping,
         notify_on_high_ping: cfg.notify_on_high_ping,
         notify_on_critical_ping: cfg.notify_on_critical_ping,
@@ -251,6 +260,7 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut Side
 
     // Push notification config into the live notification state
     sidebar.notifications.notify_on_loss = cfg.notify_on_loss;
+    sidebar.notifications.notify_on_gw_loss = cfg.notify_on_gw_loss;
     sidebar.notifications.notify_on_elevated_ping = cfg.notify_on_elevated_ping;
     sidebar.notifications.notify_on_high_ping = cfg.notify_on_high_ping;
     sidebar.notifications.notify_on_critical_ping = cfg.notify_on_critical_ping;
