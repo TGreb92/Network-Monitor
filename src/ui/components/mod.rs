@@ -7,3 +7,4 @@ pub mod helpers;
 pub mod notifications;
 pub mod presets;
 pub mod sidebar;
+pub mod tray;

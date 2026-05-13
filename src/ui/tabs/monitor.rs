@@ -31,16 +31,20 @@ impl MonitorState {
 
 /// Render the full Monitor tab contents
 pub fn render(ui: &mut egui::Ui, state: &PingState, monitor: &mut MonitorState) {
-    render_external_stats(ui, state);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            render_external_stats(ui, state);
 
-    if state.gateway.enabled && state.gateway.ip.is_some() {
-        render_gateway_stats(ui, state);
-    }
+            if state.gateway.enabled && state.gateway.ip.is_some() {
+                render_gateway_stats(ui, state);
+            }
 
-    ui.add_space(8.0);
-    render_latency_chart(ui, state, monitor);
-    ui.add_space(8.0);
-    render_interval_reports(ui, state);
+            ui.add_space(8.0);
+            render_latency_chart(ui, state, monitor);
+            ui.add_space(8.0);
+            render_interval_reports(ui, state);
+        });
 }
 
 /// Stat cards row for the external target: loss, latency, jitter, verdict
@@ -129,21 +133,29 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
     let (ext_line, timeout_markers, elevated_pts, high_pts, critical_pts) =
         build_external_chart_data(state, min_time);
 
+    // Compute the max visible latency to auto-scale threshold lines.
+    // Only show threshold lines that are within 2x of the max data point,
+    // so a 500ms Critical line doesn't stretch the chart when pings are 20ms.
+    let max_data_latency = state.results.iter()
+        .filter(|r| r.elapsed_secs >= min_time)
+        .filter_map(|r| r.latency_ms)
+        .fold(0.0_f64, f64::max);
+    let y_ceiling = (max_data_latency * 2.0).max(50.0);
+
     plot.show(ui, |plot_ui| {
-        // Threshold lines (always visible)
-        if thresholds.elevated_ms > 0.0 {
+        if thresholds.elevated_ms > 0.0 && thresholds.elevated_ms <= y_ceiling {
             plot_ui.hline(egui_plot::HLine::new(thresholds.elevated_ms)
                 .color(egui::Color32::from_rgb(200, 200, 50))
                 .style(egui_plot::LineStyle::dashed_dense())
                 .name(format!("Elevated ({}ms)", thresholds.elevated_ms as u32)));
         }
-        if thresholds.high_ms > 0.0 {
+        if thresholds.high_ms > 0.0 && thresholds.high_ms <= y_ceiling {
             plot_ui.hline(egui_plot::HLine::new(thresholds.high_ms)
                 .color(egui::Color32::from_rgb(255, 150, 50))
                 .style(egui_plot::LineStyle::dashed_dense())
                 .name(format!("High ({}ms)", thresholds.high_ms as u32)));
         }
-        if thresholds.critical_ms > 0.0 {
+        if thresholds.critical_ms > 0.0 && thresholds.critical_ms <= y_ceiling {
             plot_ui.hline(egui_plot::HLine::new(thresholds.critical_ms)
                 .color(egui::Color32::from_rgb(255, 80, 80))
                 .style(egui_plot::LineStyle::dashed_dense())

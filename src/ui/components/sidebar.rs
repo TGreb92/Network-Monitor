@@ -72,7 +72,7 @@ pub fn render(ctx: &egui::Context, state: &SharedState, sidebar: &mut SidebarSta
     let snapshot = read_sidebar_snapshot(state);
 
     super::export_import::check_auto_export_pending(state, &mut sidebar.exports);
-    super::notifications::sync_and_fire(ctx, state, &sidebar.notifications);
+    super::notifications::sync_and_fire(ctx, state, &mut sidebar.notifications);
 
     egui::SidePanel::left("control_panel")
         .resizable(true)
@@ -135,8 +135,7 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut Sideb
         ).min_size(button_size);
         if ui.add(btn).clicked() {
             let mut shared = lock_state(&state);
-            shared.flush_partial_report();
-            shared.running = false;
+            shared.stop();
             drop(shared);
             super::export_import::run_auto_export(state, &mut sidebar.exports);
         }
@@ -156,8 +155,7 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut Sideb
         if ui.add(btn).clicked() {
             let mut shared = lock_state(&state);
             shared.config.target = sidebar.selected_host();
-            shared.reset_data();
-            shared.running = true;
+            shared.start();
         }
         ui.colored_label(egui::Color32::from_rgb(255, 100, 100), "● STOPPED");
     }

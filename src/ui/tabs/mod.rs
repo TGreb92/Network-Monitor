@@ -4,5 +4,6 @@
 
 pub mod config;
 pub mod console;
+pub mod debug;
 pub mod help;
 pub mod monitor;

@@ -11,7 +11,9 @@ use crate::ui::tabs::config::ConfigState;
 use crate::ui::tabs::console::{self, ConsoleState};
 use crate::ui::tabs::monitor::{self, MonitorState};
 use crate::ui::components::sidebar::{self, SidebarState};
+use crate::ui::components::tray::{TrayState, TrayAction};
 use crate::ui::tabs::help;
+use crate::ui::tabs::debug;
 
 #[derive(PartialEq)]
 enum Tab {
@@ -19,6 +21,7 @@ enum Tab {
     Console,
     Config,
     Help,
+    Debug,
 }
 
 /// Main application struct - owns shared state and all component state
@@ -29,6 +32,7 @@ pub struct NetworkMonitorApp {
     console: ConsoleState,
     config_tab: ConfigState,
     monitor: MonitorState,
+    tray: TrayState,
     /// Frame counter for startup sequence; None after startup completes
     startup_frames_remaining: Option<u32>,
 }
@@ -54,6 +58,7 @@ impl NetworkMonitorApp {
             console: ConsoleState::new(),
             config_tab: ConfigState::from_saved(&saved),
             monitor: MonitorState::new(),
+            tray: TrayState::new(),
             startup_frames_remaining: Some(5),
         }
     }
@@ -91,7 +96,49 @@ impl eframe::App for NetworkMonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.startup_sequence(ctx);
 
+        // Always repaint periodically (even when minimized to tray)
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
+
+        // Process tray menu actions (must run even when minimized)
+        let muted = self.sidebar.notifications.muted;
+        match self.tray.update(&self.state, ctx, muted) {
+            TrayAction::ShowWindow => {
+                // Window was already shown by the tray event handler via Win32.
+                // Just clear the flag so UI rendering resumes.
+                self.tray.minimized_to_tray = false;
+            }
+            TrayAction::ToggleTest => {
+                let mut shared = lock_state(&self.state);
+                if shared.running {
+                    shared.stop();
+                } else {
+                    shared.start();
+                }
+            }
+            TrayAction::ToggleMute => {
+                self.sidebar.notifications.muted = !self.sidebar.notifications.muted;
+            }
+            TrayAction::MinimizeToTray => {
+                self.tray.minimized_to_tray = true;
+                crate::ui::components::tray::hide_window(ctx);
+            }
+            TrayAction::Exit => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            TrayAction::None => {}
+        }
+
+        // Skip UI rendering if minimized to tray (but keep processing above)
+        if self.tray.minimized_to_tray {
+            // Still sync notifications so toasts fire while minimized
+            crate::ui::components::notifications::sync_and_fire(
+                ctx, &self.state, &mut self.sidebar.notifications,
+            );
+            crate::ui::components::export_import::check_auto_export_pending(
+                &self.state, &mut self.sidebar.exports,
+            );
+            return;
+        }
 
         sidebar::render(ctx, &self.state, &mut self.sidebar);
 
@@ -101,6 +148,7 @@ impl eframe::App for NetworkMonitorApp {
                 ui.selectable_value(&mut self.active_tab, Tab::Console, "🖥 Console");
                 ui.selectable_value(&mut self.active_tab, Tab::Config, "⚙ Config");
                 ui.selectable_value(&mut self.active_tab, Tab::Help, "❓ Help");
+                ui.selectable_value(&mut self.active_tab, Tab::Debug, "🔧 Debug");
             });
             ui.separator();
 
@@ -112,6 +160,7 @@ impl eframe::App for NetworkMonitorApp {
                 Tab::Console => console::render(ui, &self.state, &mut self.console),
                 Tab::Config => crate::ui::tabs::config::render(ui, &self.state, &mut self.config_tab, &mut self.sidebar),
                 Tab::Help => help::render(ui),
+                Tab::Debug => debug::render(ui, &self.state),
             }
         });
     }
