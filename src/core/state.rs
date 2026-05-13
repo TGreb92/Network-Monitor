@@ -91,6 +91,7 @@ pub struct IntervalReport {
 }
 
 /// Tracks jitter (latency variation between consecutive pings)
+#[derive(Clone)]
 pub struct JitterTracker {
     pub last_latency: Option<f64>,
     pub values: VecDeque<f64>,
@@ -128,6 +129,7 @@ impl JitterTracker {
 }
 
 /// Gateway ping statistics
+#[derive(Clone)]
 pub struct GatewayStats {
     pub ip: Option<String>,
     pub enabled: bool,
@@ -183,6 +185,7 @@ impl GatewayStats {
 }
 
 /// Tracks loss batch events (clusters of consecutive timeouts)
+#[derive(Clone)]
 pub struct LossBatchTracker {
     pub count: u64,
     pub in_batch: bool,
@@ -214,6 +217,7 @@ impl LossBatchTracker {
 }
 
 /// Tracks the current reporting interval and accumulates results
+#[derive(Clone)]
 pub struct IntervalTracker {
     pub start: Option<Instant>,
     pub start_time: Option<chrono::NaiveDateTime>,
@@ -237,6 +241,7 @@ impl IntervalTracker {
 }
 
 /// Central shared state accessed by both the pinger thread (writer) and the GUI (reader).
+#[derive(Clone)]
 pub struct PingState {
     pub config: PingConfig,
     pub running: bool,
@@ -434,4 +439,14 @@ pub type SharedState = Arc<Mutex<PingState>>;
 /// Create a new shared state wrapped in Arc<Mutex<>> for cross-thread access
 pub fn new_shared_state(config: PingConfig) -> SharedState {
     Arc::new(Mutex::new(PingState::new(config)))
+}
+
+/// Lock shared state, recovering from poison with a warning.
+/// If the mutex was poisoned (a thread panicked while holding the lock),
+/// the inner data is recovered but may be inconsistent.
+pub fn lock_state(state: &SharedState) -> std::sync::MutexGuard<'_, PingState> {
+    state.lock().unwrap_or_else(|poison| {
+        eprintln!("WARNING: Mutex poisoned, recovering with potentially inconsistent state");
+        poison.into_inner()
+    })
 }

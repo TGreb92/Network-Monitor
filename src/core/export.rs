@@ -14,7 +14,7 @@ use crate::core::state::{
 /// Get the export directory. If `custom_path` is non-empty, use it.
 /// Otherwise default to an `exports/` subfolder next to the executable.
 /// Creates the directory if it doesn't exist.
-pub fn export_dir(custom_path: &str) -> std::path::PathBuf {
+pub fn export_dir(custom_path: &str) -> std::io::Result<std::path::PathBuf> {
     let dir = if custom_path.is_empty() {
         std::env::current_exe()
             .ok()
@@ -24,9 +24,8 @@ pub fn export_dir(custom_path: &str) -> std::path::PathBuf {
         std::path::PathBuf::from(custom_path)
     };
 
-    // Create directory if it doesn't exist
-    let _ = std::fs::create_dir_all(&dir);
-    dir
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 /// Run auto-export for all enabled formats. Returns a summary message.
@@ -38,7 +37,10 @@ pub fn run_auto_export(
     isp: bool,
     log: bool,
 ) -> String {
-    let dir = export_dir(export_path);
+    let dir = match export_dir(export_path) {
+        Ok(dir) => dir,
+        Err(err) => return format!("❌ Failed to create export directory: {}", err),
+    };
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let mut exported: Vec<&str> = Vec::new();
     let mut errors: Vec<String> = Vec::new();

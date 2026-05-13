@@ -6,7 +6,7 @@ use eframe::egui;
 
 use crate::core::config;
 use crate::core::pinger;
-use crate::core::state::{PingConfig, SharedState};
+use crate::core::state::{PingConfig, SharedState, lock_state};
 use crate::ui::tabs::config::ConfigState;
 use crate::ui::tabs::console::{self, ConsoleState};
 use crate::ui::tabs::monitor::{self, MonitorState};
@@ -38,7 +38,7 @@ impl NetworkMonitorApp {
         let saved = config::load();
 
         {
-            let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            let mut shared = lock_state(&state);
             shared.config = PingConfig::from_saved(&saved);
             shared.gateway.enabled = saved.gateway_enabled;
         }
@@ -79,7 +79,7 @@ impl NetworkMonitorApp {
                 let state_clone = self.state.clone();
                 std::thread::spawn(move || {
                     if let Some(ip) = pinger::detect_gateway() {
-                        let mut shared = state_clone.lock().unwrap_or_else(|err| err.into_inner());
+                        let mut shared = lock_state(&state_clone);
                         shared.gateway.ip = Some(ip);
                     }
                 });
@@ -109,7 +109,7 @@ impl eframe::App for NetworkMonitorApp {
 
             match self.active_tab {
                 Tab::Monitor => {
-                    let shared = self.state.lock().unwrap_or_else(|err| err.into_inner());
+                    let shared = lock_state(&self.state);
                     monitor::render(ui, &shared, &mut self.monitor);
                 }
                 Tab::Console => console::render(ui, &self.state, &mut self.console),

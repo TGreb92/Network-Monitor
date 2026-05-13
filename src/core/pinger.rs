@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::core::state::{PingResult, SharedState};
+use crate::core::state::{PingResult, SharedState, lock_state};
 
 /// Windows process creation flag that prevents a console window from being created.
 /// Without this, every `ping.exe` invocation would flash a CMD window.
@@ -64,7 +64,7 @@ fn pinger_loop(state: SharedState) {
     loop {
         // Quick check: only read running flag (no String clone)
         let running = {
-            let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            let shared = lock_state(&state);
             shared.running
         };
 
@@ -104,7 +104,7 @@ struct ConfigSnapshot {
 }
 
 fn read_config_snapshot(state: &SharedState) -> ConfigSnapshot {
-    let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    let shared = lock_state(&state);
     ConfigSnapshot {
         target: shared.config.target.clone(),
         timeout_ms: shared.config.timeout_ms,
@@ -120,7 +120,7 @@ fn check_and_stop_if_duration_exceeded(state: &SharedState, duration_secs: u64) 
     if duration_secs == 0 {
         return false;
     }
-    let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    let mut shared = lock_state(&state);
     if shared.elapsed_secs() >= duration_secs as f64 {
         shared.flush_partial_report();
         shared.running = false;
@@ -145,7 +145,7 @@ fn record_ping_result(
     interval_secs: u64,
 ) {
     let now = chrono::Local::now().naive_local();
-    let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    let mut shared = lock_state(&state);
 
     if shared.config_changed {
         shared.interval.start = None;
@@ -233,7 +233,7 @@ fn sleep_until_next_ping(ping_start: Instant, ping_interval_ms: u64) {
 fn gateway_pinger_loop(state: SharedState) {
     loop {
         let (gateway_ip, timeout_ms, ping_interval_ms, running, enabled) = {
-            let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            let shared = lock_state(&state);
             (
                 shared.gateway.ip.clone(),
                 shared.config.timeout_ms,
@@ -253,7 +253,7 @@ fn gateway_pinger_loop(state: SharedState) {
         let (success, latency_ms, _) = execute_ping(&gw_ip, timeout_ms);
 
         {
-            let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            let mut shared = lock_state(&state);
             shared.gateway.push_result(latency_ms, success);
         }
 

@@ -5,7 +5,7 @@
 
 use eframe::egui;
 
-use crate::core::state::SharedState;
+use crate::core::state::{SharedState, lock_state};
 
 /// Console-specific state
 pub struct ConsoleState {
@@ -29,7 +29,7 @@ fn render_toolbar(ui: &mut egui::Ui, state: &SharedState, console: &mut ConsoleS
     ui.horizontal(|ui| {
         ui.checkbox(&mut console.auto_scroll, "Auto-scroll");
         let running = {
-            let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            let shared = lock_state(&state);
             shared.running
         };
         if running {
@@ -42,7 +42,7 @@ fn render_toolbar(ui: &mut egui::Ui, state: &SharedState, console: &mut ConsoleS
 
 fn render_log(ui: &mut egui::Ui, state: &SharedState, console: &ConsoleState) {
     let log_messages: Vec<String> = {
-        let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+        let shared = lock_state(&state);
         shared.log_entries.iter().map(|entry| entry.message.clone()).collect()
     };
 

@@ -8,7 +8,7 @@ use std::time::Instant;
 use crate::core::config::TargetPreset;
 use crate::core::export;
 use crate::core::pinger;
-use crate::core::state::SharedState;
+use crate::core::state::{SharedState, lock_state};
 
 /// Sidebar-specific state
 pub struct SidebarState {
@@ -61,7 +61,7 @@ struct SidebarSnapshot {
 }
 
 fn read_sidebar_snapshot(state: &SharedState) -> SidebarSnapshot {
-    let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    let shared = lock_state(&state);
     SidebarSnapshot {
         running: shared.running,
         elapsed_display: shared.elapsed_display(),
@@ -131,7 +131,7 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
     // Apply new target to shared state if selection changed
     if sidebar.selected_preset != old_selection {
         let new_host = sidebar.selected_host();
-        let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+        let mut shared = lock_state(&state);
         shared.config.target = new_host;
     }
 }
@@ -144,7 +144,7 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut Sideb
             egui::RichText::new("⏹ Stop").size(16.0).strong()
         ).min_size(button_size);
         if ui.add(btn).clicked() {
-            let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            let mut shared = lock_state(&state);
             shared.flush_partial_report();
             shared.running = false;
             drop(shared);
@@ -164,7 +164,7 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut Sideb
             egui::RichText::new("▶ Start").size(16.0).strong()
         ).min_size(button_size);
         if ui.add(btn).clicked() {
-            let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            let mut shared = lock_state(&state);
             shared.config.target = sidebar.selected_host();
             shared.reset_data();
             shared.running = true;
@@ -184,7 +184,7 @@ fn render_gateway(ui: &mut egui::Ui, state: &SharedState, snap: &SidebarSnapshot
 
     if ui.button("🔍 Detect").clicked() {
         if let Some(ip) = pinger::detect_gateway() {
-            let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            let mut shared = lock_state(&state);
             shared.gateway.ip = Some(ip);
         }
     }
@@ -228,19 +228,27 @@ fn render_export(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarSt
 }
 
 fn do_export(state: &SharedState, sidebar: &mut SidebarState, format: &str) {
-    let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    // Clone state and release lock before doing file I/O
+    let snapshot = lock_state(state).clone();
+
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
     let filename = format!("network-monitor-{}.{}", timestamp, format);
-    let path = export::export_dir(&sidebar.export_path).join(&filename);
+    let export_dir = match export::export_dir(&sidebar.export_path) {
+        Ok(dir) => dir,
+        Err(err) => {
+            sidebar.export_status = Some((format!("❌ {}", err), Instant::now()));
+            return;
+        }
+    };
+    let path = export_dir.join(&filename);
 
     let result = match format {
-        "csv" => export::write_csv(&path, &shared),
-        "json" => export::write_json(&path, &shared),
-        "txt" => export::write_isp_report(&path, &shared),
-        "log" => export::write_console_log(&path, &shared),
+        "csv" => export::write_csv(&path, &snapshot),
+        "json" => export::write_json(&path, &snapshot),
+        "txt" => export::write_isp_report(&path, &snapshot),
+        "log" => export::write_console_log(&path, &snapshot),
         _ => Ok(()),
     };
-    drop(shared);
 
     match result {
         Ok(()) => sidebar.export_status = Some((format!("✅ Saved {}", filename), Instant::now())),
@@ -260,7 +268,7 @@ fn do_import(state: &SharedState, sidebar: &mut SidebarState) {
 
     match export::read_json(&path) {
         Ok(imported) => {
-            let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+            let mut shared = lock_state(&state);
             // Stop any running test before replacing state
             shared.running = false;
             // Replace all data with imported data
@@ -296,13 +304,13 @@ fn do_import(state: &SharedState, sidebar: &mut SidebarState) {
 /// Check if the pinger auto-stopped and there's a pending auto-export
 fn check_auto_export_pending(state: &SharedState, sidebar: &mut SidebarState) {
     let pending = {
-        let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+        let shared = lock_state(&state);
         shared.auto_export_pending
     };
 
     if pending {
         run_auto_export_if_enabled(state, sidebar);
-        let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+        let mut shared = lock_state(&state);
         shared.auto_export_pending = false;
     }
 }
@@ -315,23 +323,24 @@ fn run_auto_export_if_enabled(state: &SharedState, sidebar: &mut SidebarState) {
         return;
     }
 
-    let shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    // Clone state and release lock before doing file I/O
+    let snapshot = lock_state(state).clone();
+
     let msg = export::run_auto_export(
-        &shared,
+        &snapshot,
         &sidebar.export_path,
         sidebar.auto_export_csv,
         sidebar.auto_export_json,
         sidebar.auto_export_isp,
         sidebar.auto_export_log,
     );
-    drop(shared);
 
     sidebar.export_status = Some((msg, Instant::now()));
 }
 
 /// Sync notification config to shared state and check for pending loss notifications
 fn sync_and_check_notifications(ctx: &egui::Context, state: &SharedState, sidebar: &SidebarState) {
-    let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    let mut shared = lock_state(&state);
     shared.notify_loss_enabled = sidebar.notify_on_loss;
 
     if shared.notify_loss_pending {

@@ -7,7 +7,7 @@ use eframe::egui;
 use std::time::Instant;
 
 use crate::core::config::{self, SavedConfig, default_presets};
-use crate::core::state::{PingConfig, SharedState};
+use crate::core::state::{PingConfig, SharedState, lock_state};
 use crate::ui::components::presets::{self, PresetEditorState};
 use crate::ui::components::sidebar::SidebarState;
 
@@ -162,7 +162,7 @@ fn render_status(ui: &mut egui::Ui, cfg: &ConfigState) {
 
 fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &SidebarState) {
     let target = sidebar.selected_host();
-    let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    let mut shared = lock_state(&state);
     shared.config = PingConfig {
         target,
         timeout_ms: cfg.timeout,
