@@ -8,7 +8,7 @@
 use std::time::Instant;
 use eframe::egui;
 
-use crate::core::state::{SharedState, PingThresholds, lock_state};
+use crate::core::state::{SharedState, PingThresholds, PingTier, lock_state};
 
 /// Minimum seconds between consecutive toast notifications
 const TOAST_COOLDOWN_SECS: f64 = 5.0;
@@ -25,8 +25,8 @@ pub struct NotificationState {
     pub muted: bool,
     /// Last time a toast was fired (for cooldown)
     last_toast_time: Option<Instant>,
-    /// Severity of the last toast (higher = more severe, used for cooldown override)
-    last_toast_severity: u8,
+    /// Severity of the last toast (higher can override cooldown)
+    last_toast_severity: PingTier,
 }
 
 impl NotificationState {
@@ -41,7 +41,7 @@ impl NotificationState {
             threshold_critical_ms: 500,
             muted: false,
             last_toast_time: None,
-            last_toast_severity: 0,
+            last_toast_severity: PingTier::Normal,
         }
     }
 
@@ -56,7 +56,7 @@ impl NotificationState {
             threshold_critical_ms: saved.threshold_critical_ms,
             muted: false,
             last_toast_time: None,
-            last_toast_severity: 0,
+            last_toast_severity: PingTier::Normal,
         }
     }
 }
@@ -73,71 +73,72 @@ pub fn sync_and_fire(ctx: &egui::Context, state: &SharedState, notif: &mut Notif
         high_ms: notif.threshold_high_ms as f64,
         critical_ms: notif.threshold_critical_ms as f64,
     };
-    shared.ping_tiers.notify_elevated_enabled = notif.notify_on_elevated_ping;
-    shared.ping_tiers.notify_high_enabled = notif.notify_on_high_ping;
-    shared.ping_tiers.notify_critical_enabled = notif.notify_on_critical_ping;
+    shared.ping_tiers.set_enabled(PingTier::Elevated, notif.notify_on_elevated_ping);
+    shared.ping_tiers.set_enabled(PingTier::High, notif.notify_on_high_ping);
+    shared.ping_tiers.set_enabled(PingTier::Critical, notif.notify_on_critical_ping);
 
     if notif.muted {
         shared.notify_loss_pending = false;
-        shared.ping_tiers.notify_elevated_pending = false;
-        shared.ping_tiers.notify_high_pending = false;
-        shared.ping_tiers.notify_critical_pending = false;
+        shared.ping_tiers.reset_pending();
         return;
     }
 
-    // Determine the highest-severity pending event
-    // Severity: 0=none, 1=Elevated, 2=High, 3=Critical, 4=Loss
-    let mut toast: Option<(&str, String)> = None;
-    let mut severity: u8 = 0;
-    let target = shared.config.target.clone();
+    // Check if cooldown has expired - reset severity tracking if so
+    let in_cooldown = notif.last_toast_time
+        .is_some_and(|t| t.elapsed().as_secs_f64() < TOAST_COOLDOWN_SECS);
+    if !in_cooldown {
+        notif.last_toast_severity = PingTier::Normal;
+    }
 
+    // Determine the highest-severity pending event (peek without clearing)
+    let target = shared.config.target.clone();
     let thresholds = shared.thresholds.clone();
-    let tier_pending = shared.ping_tiers.drain_pending(&thresholds);
-    for (label, count, threshold) in tier_pending {
-        let s = match label {
-            "Elevated Ping" => 1,
-            "High Ping" => 2,
-            "Critical Ping" => 3,
-            _ => 1,
-        };
-        if s > severity {
-            severity = s;
-            toast = Some((label, format!(
+
+    let mut severity = PingTier::Normal;
+    let mut toast: Option<(String, String)> = None;
+
+    // Check tier notifications (highest first)
+    if let Some(tier) = shared.ping_tiers.highest_pending() {
+        if tier > severity {
+            severity = tier;
+            let count = shared.ping_tiers.count(tier);
+            let threshold = tier.threshold(&thresholds) as u32;
+            toast = Some((tier.label().to_string(), format!(
                 "{} #{} on {} (>= {}ms)\nDetected at {}",
-                label, count, target, threshold,
+                tier.label(), count, target, threshold,
                 chrono::Local::now().format("%H:%M:%S"),
             )));
         }
     }
 
+    // Loss is highest priority
     if shared.notify_loss_pending && shared.notify_loss_enabled {
-        shared.notify_loss_pending = false;
-        severity = 4;
+        severity = PingTier::Loss;
         let count = shared.loss_tracker.count;
-        toast = Some(("Loss Detected", format!(
+        toast = Some(("Loss Detected".to_string(), format!(
             "Loss event #{} on {}\nStarted at {}",
             count, target, chrono::Local::now().format("%H:%M:%S"),
         )));
     }
 
-    drop(shared);
+    // Fire if: cooldown expired, OR this is higher severity than the last toast
+    let should_fire = severity > PingTier::Normal
+        && (!in_cooldown || severity > notif.last_toast_severity);
 
-    // Fire if: no cooldown active, OR new severity is higher than the last toast
-    let in_cooldown = notif.last_toast_time
-        .is_some_and(|t| t.elapsed().as_secs_f64() < TOAST_COOLDOWN_SECS);
-    let can_override = severity > notif.last_toast_severity;
-
-    if let Some((summary, body)) = toast {
-        if !in_cooldown || can_override {
-            show_toast(ctx, summary, &body);
-            notif.last_toast_time = Some(Instant::now());
-            notif.last_toast_severity = severity;
+    if should_fire {
+        // NOW clear the consumed flags
+        if severity == PingTier::Loss {
+            shared.notify_loss_pending = false;
         }
+        shared.ping_tiers.clear_pending_up_to(severity);
     }
 
-    // Reset severity tracking after cooldown expires
-    if !in_cooldown {
-        notif.last_toast_severity = 0;
+    drop(shared);
+
+    if let Some((summary, body)) = toast.filter(|_| should_fire) {
+        show_toast(ctx, &summary, &body);
+        notif.last_toast_time = Some(Instant::now());
+        notif.last_toast_severity = severity;
     }
 }
 
@@ -154,9 +155,13 @@ pub fn render_mute_toggle(ui: &mut egui::Ui, notif: &mut NotificationState) {
     });
 }
 
-/// Show a Windows toast notification (non-blocking, runs on UI thread)
+/// Show a Windows toast notification.
 fn show_toast(_ctx: &egui::Context, summary: &str, body: &str) {
-    fire_toast(summary, body);
+    let _ = notify_rust::Notification::new()
+        .summary(&format!("Network Monitor - {}", summary))
+        .body(body)
+        .timeout(notify_rust::Timeout::Milliseconds(5000))
+        .show();
 }
 
 /// Fire a toast notification directly. Public for use by the Debug tab.

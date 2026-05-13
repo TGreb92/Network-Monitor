@@ -60,14 +60,11 @@ fn render_log(ui: &mut egui::Ui, state: &SharedState, console: &ConsoleState) {
         ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.0));
         for (msg, latency_ms, success) in &entries {
             let color = if !success {
-                egui::Color32::from_rgb(255, 100, 100)
+                let [r, g, b] = PingTier::Loss.rgb();
+                egui::Color32::from_rgb(r, g, b)
             } else {
-                match PingTier::classify(*latency_ms, &thresholds) {
-                    PingTier::Critical => egui::Color32::from_rgb(255, 80, 80),
-                    PingTier::High => egui::Color32::from_rgb(255, 150, 50),
-                    PingTier::Elevated => egui::Color32::from_rgb(200, 200, 50),
-                    PingTier::Normal => egui::Color32::from_rgb(180, 220, 180),
-                }
+                let [r, g, b] = PingTier::classify(*latency_ms, &thresholds).rgb();
+                egui::Color32::from_rgb(r, g, b)
             };
             ui.colored_label(color, msg);
         }

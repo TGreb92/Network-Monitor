@@ -143,38 +143,32 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
     let y_ceiling = (max_data_latency * 2.0).max(50.0);
 
     plot.show(ui, |plot_ui| {
-        if thresholds.elevated_ms > 0.0 && thresholds.elevated_ms <= y_ceiling {
-            plot_ui.hline(egui_plot::HLine::new(thresholds.elevated_ms)
-                .color(egui::Color32::from_rgb(200, 200, 50))
-                .style(egui_plot::LineStyle::dashed_dense())
-                .name(format!("Elevated ({}ms)", thresholds.elevated_ms as u32)));
-        }
-        if thresholds.high_ms > 0.0 && thresholds.high_ms <= y_ceiling {
-            plot_ui.hline(egui_plot::HLine::new(thresholds.high_ms)
-                .color(egui::Color32::from_rgb(255, 150, 50))
-                .style(egui_plot::LineStyle::dashed_dense())
-                .name(format!("High ({}ms)", thresholds.high_ms as u32)));
-        }
-        if thresholds.critical_ms > 0.0 && thresholds.critical_ms <= y_ceiling {
-            plot_ui.hline(egui_plot::HLine::new(thresholds.critical_ms)
-                .color(egui::Color32::from_rgb(255, 80, 80))
-                .style(egui_plot::LineStyle::dashed_dense())
-                .name(format!("Critical ({}ms)", thresholds.critical_ms as u32)));
+        // Threshold lines - only show when data approaches them
+        for &tier in &[PingTier::Elevated, PingTier::High, PingTier::Critical] {
+            let thresh = tier.threshold(thresholds);
+            if thresh > 0.0 && thresh <= y_ceiling {
+                let [r, g, b] = tier.rgb();
+                plot_ui.hline(egui_plot::HLine::new(thresh)
+                    .color(egui::Color32::from_rgb(r, g, b))
+                    .style(egui_plot::LineStyle::dashed_dense())
+                    .name(format!("{} ({}ms)", tier.label(), thresh as u32)));
+            }
         }
 
         plot_ui.line(ext_line);
         plot_ui.points(timeout_markers);
-        if !elevated_pts.is_empty() {
-            plot_ui.points(egui_plot::Points::new(elevated_pts)
-                .color(egui::Color32::from_rgb(200, 200, 50)).radius(3.5).name("Elevated"));
-        }
-        if !high_pts.is_empty() {
-            plot_ui.points(egui_plot::Points::new(high_pts)
-                .color(egui::Color32::from_rgb(255, 150, 50)).radius(3.5).name("High"));
-        }
-        if !critical_pts.is_empty() {
-            plot_ui.points(egui_plot::Points::new(critical_pts)
-                .color(egui::Color32::from_rgb(255, 80, 80)).radius(4.0).name("Critical"));
+        // Tier dots - no legend name to avoid duplicating the threshold line entry
+        for (tier, pts) in [
+            (PingTier::Elevated, elevated_pts),
+            (PingTier::High, high_pts),
+            (PingTier::Critical, critical_pts),
+        ] {
+            if !pts.is_empty() {
+                let [r, g, b] = tier.rgb();
+                plot_ui.points(egui_plot::Points::new(pts)
+                    .color(egui::Color32::from_rgb(r, g, b))
+                    .radius(3.5));
+            }
         }
         if show_gateway { plot_ui.line(gw_line); }
     });
@@ -225,7 +219,7 @@ fn build_external_chart_data(
             PingTier::Critical => critical_pts.push([r.elapsed_secs, r.latency_ms.unwrap()]),
             PingTier::High => high_pts.push([r.elapsed_secs, r.latency_ms.unwrap()]),
             PingTier::Elevated => elevated_pts.push([r.elapsed_secs, r.latency_ms.unwrap()]),
-            PingTier::Normal => {}
+            PingTier::Normal | PingTier::Loss => {}
         }
     }
 

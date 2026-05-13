@@ -149,9 +149,9 @@ fn snapshot_state_info(state: &PingState) -> Vec<(&'static str, String)> {
         ("Loss batches", state.loss_tracker.count.to_string()),
         ("Loss pending", state.notify_loss_pending.to_string()),
         ("Loss enabled", state.notify_loss_enabled.to_string()),
-        ("Elevated batches", state.ping_tiers.elevated.count.to_string()),
-        ("High batches", state.ping_tiers.high.count.to_string()),
-        ("Critical batches", state.ping_tiers.critical.count.to_string()),
+        ("Elevated batches", state.ping_tiers.count(crate::core::state::PingTier::Elevated).to_string()),
+        ("High batches", state.ping_tiers.count(crate::core::state::PingTier::High).to_string()),
+        ("Critical batches", state.ping_tiers.count(crate::core::state::PingTier::Critical).to_string()),
         ("Thresholds", format!(
             "E:{}ms H:{}ms C:{}ms",
             state.thresholds.elevated_ms as u32,

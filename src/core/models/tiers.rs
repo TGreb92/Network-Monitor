@@ -3,14 +3,19 @@
 //! 3-tier latency classification (Elevated/High/Critical) with batch
 //! tracking and notification state for each tier.
 
-/// Severity tier for high-latency pings
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Severity tier for ping events, ordered from lowest to highest.
+/// Used for latency classification, console coloring, and notification priority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PingTier {
     Normal,
     Elevated,
     High,
     Critical,
+    Loss,
 }
+
+/// The 3 configurable latency tiers (excludes Normal and Loss)
+const LATENCY_TIERS: [PingTier; 3] = [PingTier::Elevated, PingTier::High, PingTier::Critical];
 
 impl PingTier {
     /// Classify a latency against the 3 tier thresholds
@@ -33,6 +38,38 @@ impl PingTier {
             Self::Elevated => "Elevated",
             Self::High => "High",
             Self::Critical => "Critical",
+            Self::Loss => "Loss",
+        }
+    }
+
+    /// RGB color associated with this tier for UI rendering
+    pub fn rgb(self) -> [u8; 3] {
+        match self {
+            Self::Normal => [180, 220, 180],    // green
+            Self::Elevated => [200, 200, 50],   // yellow
+            Self::High => [255, 150, 50],       // orange
+            Self::Critical => [255, 80, 80],    // red
+            Self::Loss => [255, 100, 100],      // bright red
+        }
+    }
+
+    /// Get the threshold value for this tier from the config
+    pub fn threshold(self, t: &PingThresholds) -> f64 {
+        match self {
+            Self::Elevated => t.elevated_ms,
+            Self::High => t.high_ms,
+            Self::Critical => t.critical_ms,
+            _ => 0.0,
+        }
+    }
+
+    /// Index for array-based storage (only latency tiers)
+    fn index(self) -> usize {
+        match self {
+            Self::Elevated => 0,
+            Self::High => 1,
+            Self::Critical => 2,
+            _ => 0,
         }
     }
 }
@@ -84,72 +121,101 @@ impl HighPingBatchTracker {
     }
 }
 
-/// Per-tier batch tracker and notification state
+/// Per-tier state: batch tracker + notification flags
+#[derive(Clone)]
+struct TierState {
+    tracker: HighPingBatchTracker,
+    notify_pending: bool,
+    notify_enabled: bool,
+}
+
+impl TierState {
+    fn new() -> Self {
+        Self {
+            tracker: HighPingBatchTracker::new(),
+            notify_pending: false,
+            notify_enabled: false,
+        }
+    }
+}
+
+/// Tracks all 3 latency tiers with batch detection and notification state.
 #[derive(Clone)]
 pub struct TieredPingTracker {
-    pub elevated: HighPingBatchTracker,
-    pub high: HighPingBatchTracker,
-    pub critical: HighPingBatchTracker,
-    pub notify_elevated_pending: bool,
-    pub notify_high_pending: bool,
-    pub notify_critical_pending: bool,
-    pub notify_elevated_enabled: bool,
-    pub notify_high_enabled: bool,
-    pub notify_critical_enabled: bool,
+    tiers: [TierState; 3],
 }
 
 impl TieredPingTracker {
     pub fn new() -> Self {
         Self {
-            elevated: HighPingBatchTracker::new(),
-            high: HighPingBatchTracker::new(),
-            critical: HighPingBatchTracker::new(),
-            notify_elevated_pending: false,
-            notify_high_pending: false,
-            notify_critical_pending: false,
-            notify_elevated_enabled: false,
-            notify_high_enabled: false,
-            notify_critical_enabled: false,
+            tiers: [TierState::new(), TierState::new(), TierState::new()],
         }
+    }
+
+    /// Get the batch count for a specific tier
+    pub fn count(&self, tier: PingTier) -> u64 {
+        self.tiers[tier.index()].tracker.count
+    }
+
+    /// Set whether notifications are enabled for a tier
+    pub fn set_enabled(&mut self, tier: PingTier, enabled: bool) {
+        self.tiers[tier.index()].notify_enabled = enabled;
     }
 
     /// Record a latency against all 3 tiers. Sets pending flags for new batches.
     pub fn record(&mut self, latency_ms: Option<f64>, thresholds: &PingThresholds) {
-        if self.elevated.record(latency_ms, thresholds.elevated_ms) && self.notify_elevated_enabled {
-            self.notify_elevated_pending = true;
-        }
-        if self.high.record(latency_ms, thresholds.high_ms) && self.notify_high_enabled {
-            self.notify_high_pending = true;
-        }
-        if self.critical.record(latency_ms, thresholds.critical_ms) && self.notify_critical_enabled {
-            self.notify_critical_pending = true;
+        for &tier in &LATENCY_TIERS {
+            let state = &mut self.tiers[tier.index()];
+            if state.tracker.record(latency_ms, tier.threshold(thresholds)) && state.notify_enabled {
+                state.notify_pending = true;
+            }
         }
     }
 
     pub fn reset(&mut self) {
-        self.elevated.reset();
-        self.high.reset();
-        self.critical.reset();
-        self.notify_elevated_pending = false;
-        self.notify_high_pending = false;
-        self.notify_critical_pending = false;
+        for state in &mut self.tiers {
+            state.tracker.reset();
+            state.notify_pending = false;
+        }
     }
 
-    /// Drain all pending tier notifications. Returns (label, count, threshold_ms)
+    /// Clear all pending flags without resetting trackers
+    pub fn reset_pending(&mut self) {
+        for state in &mut self.tiers {
+            state.notify_pending = false;
+        }
+    }
+
+    /// Return the highest-severity tier that has a pending notification,
+    /// without clearing the flag. Returns None if nothing pending.
+    pub fn highest_pending(&self) -> Option<PingTier> {
+        LATENCY_TIERS.iter().rev()
+            .find(|&&tier| {
+                let state = &self.tiers[tier.index()];
+                state.notify_pending && state.notify_enabled
+            })
+            .copied()
+    }
+
+    /// Clear the pending flag for a specific tier (and all lower tiers)
+    pub fn clear_pending_up_to(&mut self, tier: PingTier) {
+        for &t in &LATENCY_TIERS {
+            if t <= tier {
+                self.tiers[t.index()].notify_pending = false;
+            }
+        }
+    }
+
+    /// Drain all pending tier notifications. Returns (tier, count, threshold_ms)
     /// for each tier that has a pending notification, clearing the flags.
-    pub fn drain_pending(&mut self, thresholds: &PingThresholds) -> Vec<(&'static str, u64, u32)> {
+    pub fn drain_pending(&mut self, thresholds: &PingThresholds) -> Vec<(PingTier, u64, u32)> {
         let mut pending = Vec::new();
-        if self.notify_elevated_pending && self.notify_elevated_enabled {
-            self.notify_elevated_pending = false;
-            pending.push(("Elevated Ping", self.elevated.count, thresholds.elevated_ms as u32));
-        }
-        if self.notify_high_pending && self.notify_high_enabled {
-            self.notify_high_pending = false;
-            pending.push(("High Ping", self.high.count, thresholds.high_ms as u32));
-        }
-        if self.notify_critical_pending && self.notify_critical_enabled {
-            self.notify_critical_pending = false;
-            pending.push(("Critical Ping", self.critical.count, thresholds.critical_ms as u32));
+        for &tier in &LATENCY_TIERS {
+            let state = &mut self.tiers[tier.index()];
+            if state.notify_pending && state.notify_enabled {
+                state.notify_pending = false;
+                pending.push((tier, state.tracker.count, tier.threshold(thresholds) as u32));
+            }
         }
         pending
     }
