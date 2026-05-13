@@ -37,6 +37,9 @@ pub struct SavedConfig {
     pub auto_export_isp: bool,
     #[serde(default)]
     pub auto_export_log: bool,
+    /// Show a popup notification when a loss event starts
+    #[serde(default)]
+    pub notify_on_loss: bool,
 }
 
 impl Default for SavedConfig {
@@ -55,6 +58,7 @@ impl Default for SavedConfig {
             auto_export_json: false,
             auto_export_isp: false,
             auto_export_log: false,
+            notify_on_loss: false,
         }
     }
 }

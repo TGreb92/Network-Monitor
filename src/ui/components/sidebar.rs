@@ -20,6 +20,7 @@ pub struct SidebarState {
     pub auto_export_json: bool,
     pub auto_export_isp: bool,
     pub auto_export_log: bool,
+    pub notify_on_loss: bool,
 }
 
 impl SidebarState {
@@ -33,6 +34,7 @@ impl SidebarState {
             auto_export_json: false,
             auto_export_isp: false,
             auto_export_log: false,
+            notify_on_loss: false,
         }
     }
 
@@ -79,6 +81,9 @@ pub fn render(ctx: &egui::Context, state: &SharedState, sidebar: &mut SidebarSta
 
     // Check if pinger auto-stopped and needs auto-export
     check_auto_export_pending(state, sidebar);
+
+    // Sync notification setting and check for pending loss notifications
+    sync_and_check_notifications(ctx, state, sidebar);
 
     egui::SidePanel::left("control_panel")
         .resizable(true)
@@ -322,4 +327,38 @@ fn run_auto_export_if_enabled(state: &SharedState, sidebar: &mut SidebarState) {
     drop(shared);
 
     sidebar.export_status = Some((msg, Instant::now()));
+}
+
+/// Sync notification config to shared state and check for pending loss notifications
+fn sync_and_check_notifications(ctx: &egui::Context, state: &SharedState, sidebar: &SidebarState) {
+    let mut shared = state.lock().unwrap_or_else(|err| err.into_inner());
+    shared.notify_loss_enabled = sidebar.notify_on_loss;
+
+    if shared.notify_loss_pending {
+        shared.notify_loss_pending = false;
+        let target = shared.config.target.clone();
+        let loss_count = shared.loss_tracker.count;
+        drop(shared);
+
+        show_loss_notification(ctx, &target, loss_count);
+    }
+}
+
+/// Show a Windows toast notification for a loss event
+fn show_loss_notification(_ctx: &egui::Context, target: &str, loss_count: u64) {
+    let body = format!(
+        "Loss event #{} on {}\nStarted at {}",
+        loss_count,
+        target,
+        chrono::Local::now().format("%H:%M:%S"),
+    );
+
+    // Spawn in a thread so it doesn't block the GUI
+    std::thread::spawn(move || {
+        let _ = notify_rust::Notification::new()
+            .summary("Network Monitor - Loss Detected")
+            .body(&body)
+            .timeout(notify_rust::Timeout::Milliseconds(5000))
+            .show();
+    });
 }

@@ -134,16 +134,62 @@ Click **📥 Load JSON…** in the sidebar to import a previous JSON export and 
 | toml | 0.8 | Config file persistence |
 | rfd | 0.15 | Native file/folder picker dialogs |
 
-## Future Improvements
+## Roadmap
 
-- [ ] Multiple simultaneous targets (side-by-side comparison)
-- [ ] System tray icon with minimize-to-tray
-- [ ] Sound/desktop notifications on connection loss
-- [ ] Traceroute integration (hop-by-hop analysis)
-- [ ] Historical session comparison
+### ✅ Completed
+
+- [x] Real-time ping monitoring with live stats
+- [x] Latency chart with time-based X-axis, loss period markers, snap-to-nearest tooltips
+- [x] Interval reports with loss event counts
+- [x] Loss batch tracking (distinct connectivity drops)
+- [x] Jitter calculation and display
+- [x] Gateway auto-detection and parallel monitoring
+- [x] ISP vs local network diagnosis
+- [x] Named target presets with CRUD editor
+- [x] Built-in presets (Google DNS, Cloudflare, Quad9, OpenDNS)
+- [x] Quick-switch dropdown in sidebar
+- [x] Configurable ping frequency, timeout, report interval
+- [x] Configurable test duration with progress bar
+- [x] Export: CSV, JSON, ISP report, console log
+- [x] JSON import to review past sessions in the UI
+- [x] Auto-export on stop (per-format toggles)
+- [x] Configurable export folder with native folder picker
+- [x] TOML config persistence
+- [x] Console log with auto-scroll toggle
+- [x] Help tab with full metric explanations
+
+### 🔜 Planned
+
+#### Chart & Visualization
+- [ ] Chart time range selector (zoom to last 1m/5m/15m/30m/all)
 - [ ] Latency distribution histogram
-- [ ] Min/Max/Avg overlay lines on chart
-- [ ] Cross-platform support (Linux/macOS)
+- [ ] Min/Max/Avg overlay reference lines on chart
+
+#### Network & Diagnostics
+- [ ] Multiple simultaneous targets (side-by-side comparison)
+- [ ] Traceroute integration (hop-by-hop analysis)
+- [ ] DNS resolution monitoring (track lookup time separately)
+- [ ] Network interface selector (multi-NIC setups)
+- [ ] Packet size configuration (test with different payload sizes)
+
+#### Notifications & Alerts
+- [ ] Sound/desktop notifications on connection loss
+- [ ] Configurable alert thresholds (latency/loss triggers)
+
+#### Session Management
+- [ ] Historical session comparison (compare past runs)
+- [ ] Session auto-save (local history for later review)
+
+#### UX & Window Management
+- [ ] System tray icon with minimize-to-tray
+- [ ] Dark/light theme toggle
+- [ ] Window always-on-top toggle
+- [ ] Compact/mini mode (small floating window with loss % and latency)
+- [ ] Startup auto-run (auto-start pinging on launch)
+- [ ] Connection uptime tracker (total uptime % since app started)
+
+#### Platform
+- [ ] Cross-platform support (Linux/macOS ping commands)
 
 ## License
 

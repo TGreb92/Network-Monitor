@@ -193,12 +193,17 @@ impl LossBatchTracker {
         Self { count: 0, in_batch: false }
     }
 
-    pub fn record(&mut self, success: bool) {
+    /// Records a ping result. Returns true if a NEW loss batch just started.
+    pub fn record(&mut self, success: bool) -> bool {
         if success {
             self.in_batch = false;
+            false
         } else if !self.in_batch {
             self.count += 1;
             self.in_batch = true;
+            true
+        } else {
+            false
         }
     }
 
@@ -250,6 +255,10 @@ pub struct PingState {
     pub interval: IntervalTracker,
     /// Set by pinger when auto-stop fires; GUI checks and runs auto-export
     pub auto_export_pending: bool,
+    /// Set by pinger when a new loss batch starts; GUI checks and shows notification
+    pub notify_loss_pending: bool,
+    /// Whether loss event notifications are enabled
+    pub notify_loss_enabled: bool,
 }
 
 impl PingState {
@@ -271,12 +280,17 @@ impl PingState {
             loss_tracker: LossBatchTracker::new(),
             interval: IntervalTracker::new(),
             auto_export_pending: false,
+            notify_loss_pending: false,
+            notify_loss_enabled: false,
         }
     }
 
     /// Record a ping result with jitter and loss batch tracking.
     pub fn push_result(&mut self, result: PingResult) {
-        self.loss_tracker.record(result.success);
+        let new_loss_batch = self.loss_tracker.record(result.success);
+        if new_loss_batch && self.notify_loss_enabled {
+            self.notify_loss_pending = true;
+        }
 
         if let Some(lat) = result.latency_ms {
             self.jitter.record(lat);
@@ -361,6 +375,7 @@ impl PingState {
         self.loss_tracker.reset();
         self.interval.reset();
         self.auto_export_pending = false;
+        self.notify_loss_pending = false;
     }
 }
 

@@ -24,6 +24,7 @@ pub struct ConfigState {
     pub auto_export_json: bool,
     pub auto_export_isp: bool,
     pub auto_export_log: bool,
+    pub notify_on_loss: bool,
     pub status: Option<(String, Instant)>,
     pub preset_editor: PresetEditorState,
 }
@@ -42,6 +43,7 @@ impl ConfigState {
             auto_export_json: saved.auto_export_json,
             auto_export_isp: saved.auto_export_isp,
             auto_export_log: saved.auto_export_log,
+            notify_on_loss: saved.notify_on_loss,
             status: None,
             preset_editor: PresetEditorState::new(),
         }
@@ -68,6 +70,7 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
     sidebar.auto_export_json = cfg.auto_export_json;
     sidebar.auto_export_isp = cfg.auto_export_isp;
     sidebar.auto_export_log = cfg.auto_export_log;
+    sidebar.notify_on_loss = cfg.notify_on_loss;
 }
 
 fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
@@ -127,6 +130,11 @@ fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
         ui.checkbox(&mut cfg.auto_export_isp, "ISP Report");
         ui.checkbox(&mut cfg.auto_export_log, "Console Log");
     });
+
+    ui.add_space(8.0);
+    ui.heading("🔔 Notifications");
+    ui.add_space(4.0);
+    ui.checkbox(&mut cfg.notify_on_loss, "Popup notification on loss event");
 }
 
 fn render_buttons(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
@@ -180,6 +188,7 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &SidebarS
         auto_export_json: cfg.auto_export_json,
         auto_export_isp: cfg.auto_export_isp,
         auto_export_log: cfg.auto_export_log,
+        notify_on_loss: cfg.notify_on_loss,
     };
     match config::save(&saved) {
         Ok(()) => cfg.status = Some(("✅ Config saved".into(), Instant::now())),

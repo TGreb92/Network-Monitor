@@ -48,6 +48,7 @@ impl NetworkMonitorApp {
         sidebar.auto_export_json = saved.auto_export_json;
         sidebar.auto_export_isp = saved.auto_export_isp;
         sidebar.auto_export_log = saved.auto_export_log;
+        sidebar.notify_on_loss = saved.notify_on_loss;
 
         Self {
             state,
