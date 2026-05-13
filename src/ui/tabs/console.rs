@@ -41,9 +41,16 @@ fn render_toolbar(ui: &mut egui::Ui, state: &SharedState, console: &mut ConsoleS
 }
 
 fn render_log(ui: &mut egui::Ui, state: &SharedState, console: &ConsoleState) {
-    let log_messages: Vec<String> = {
+    use crate::core::state::PingTier;
+
+    let (entries, thresholds) = {
         let shared = lock_state(&state);
-        shared.log_entries.iter().map(|entry| entry.message.clone()).collect()
+        let entries: Vec<(String, Option<f64>, bool)> = shared.log_entries
+            .iter()
+            .map(|e| (e.message.clone(), e.latency_ms, e.success))
+            .collect();
+        let thresholds = shared.thresholds.clone();
+        (entries, thresholds)
     };
 
     let scroll = egui::ScrollArea::vertical().auto_shrink([false; 2]);
@@ -51,11 +58,16 @@ fn render_log(ui: &mut egui::Ui, state: &SharedState, console: &ConsoleState) {
 
     scroll.show(ui, |ui| {
         ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.0));
-        for msg in &log_messages {
-            let color = if msg.contains("timed out") || msg.contains("unreachable") {
+        for (msg, latency_ms, success) in &entries {
+            let color = if !success {
                 egui::Color32::from_rgb(255, 100, 100)
             } else {
-                egui::Color32::from_rgb(180, 220, 180)
+                match PingTier::classify(*latency_ms, &thresholds) {
+                    PingTier::Critical => egui::Color32::from_rgb(255, 80, 80),
+                    PingTier::High => egui::Color32::from_rgb(255, 150, 50),
+                    PingTier::Elevated => egui::Color32::from_rgb(200, 200, 50),
+                    PingTier::Normal => egui::Color32::from_rgb(180, 220, 180),
+                }
             };
             ui.colored_label(color, msg);
         }

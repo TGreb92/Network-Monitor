@@ -6,7 +6,7 @@
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 
-use crate::core::state::PingState;
+use crate::core::state::{PingState, PingTier};
 use crate::ui::components::helpers::{stat_card, loss_color, latency_color, jitter_color};
 
 /// Time window options for the chart (in seconds, 0 = show all)
@@ -95,7 +95,6 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
     let window_secs = TIME_WINDOWS[monitor.selected_window].0;
     let min_time = if window_secs > 0.0 { (elapsed - window_secs).max(0.0) } else { 0.0 };
 
-    let (ext_line, timeout_markers) = build_external_chart_data(state, min_time);
     let gw_line = build_gateway_chart_data(state, window_secs);
     let visible_results = build_tooltip_data(state, min_time);
     let show_gateway = state.gateway.enabled && state.gateway.ip.is_some();
@@ -126,9 +125,45 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
         plot = plot.include_x(0.0).include_x(elapsed);
     }
 
+    let thresholds = &state.thresholds;
+    let (ext_line, timeout_markers, elevated_pts, high_pts, critical_pts) =
+        build_external_chart_data(state, min_time);
+
     plot.show(ui, |plot_ui| {
+        // Threshold lines (always visible)
+        if thresholds.elevated_ms > 0.0 {
+            plot_ui.hline(egui_plot::HLine::new(thresholds.elevated_ms)
+                .color(egui::Color32::from_rgb(200, 200, 50))
+                .style(egui_plot::LineStyle::dashed_dense())
+                .name(format!("Elevated ({}ms)", thresholds.elevated_ms as u32)));
+        }
+        if thresholds.high_ms > 0.0 {
+            plot_ui.hline(egui_plot::HLine::new(thresholds.high_ms)
+                .color(egui::Color32::from_rgb(255, 150, 50))
+                .style(egui_plot::LineStyle::dashed_dense())
+                .name(format!("High ({}ms)", thresholds.high_ms as u32)));
+        }
+        if thresholds.critical_ms > 0.0 {
+            plot_ui.hline(egui_plot::HLine::new(thresholds.critical_ms)
+                .color(egui::Color32::from_rgb(255, 80, 80))
+                .style(egui_plot::LineStyle::dashed_dense())
+                .name(format!("Critical ({}ms)", thresholds.critical_ms as u32)));
+        }
+
         plot_ui.line(ext_line);
         plot_ui.points(timeout_markers);
+        if !elevated_pts.is_empty() {
+            plot_ui.points(egui_plot::Points::new(elevated_pts)
+                .color(egui::Color32::from_rgb(200, 200, 50)).radius(3.5).name("Elevated"));
+        }
+        if !high_pts.is_empty() {
+            plot_ui.points(egui_plot::Points::new(high_pts)
+                .color(egui::Color32::from_rgb(255, 150, 50)).radius(3.5).name("High"));
+        }
+        if !critical_pts.is_empty() {
+            plot_ui.points(egui_plot::Points::new(critical_pts)
+                .color(egui::Color32::from_rgb(255, 80, 80)).radius(4.0).name("Critical"));
+        }
         if show_gateway { plot_ui.line(gw_line); }
     });
 }
@@ -145,11 +180,15 @@ fn render_window_selector(ui: &mut egui::Ui, monitor: &mut MonitorState) {
     });
 }
 
-fn build_external_chart_data(state: &PingState, min_time: f64) -> (Line<'_>, egui_plot::Points<'_>) {
+fn build_external_chart_data(
+    state: &PingState, min_time: f64
+) -> (Line<'_>, egui_plot::Points<'_>, Vec<[f64; 2]>, Vec<[f64; 2]>, Vec<[f64; 2]>) {
+    let thresholds = &state.thresholds;
+
     let latency_points: Vec<[f64; 2]> = state.results
         .iter()
-        .filter(|result| result.elapsed_secs >= min_time)
-        .filter_map(|result| result.latency_ms.map(|ms| [result.elapsed_secs, ms]))
+        .filter(|r| r.elapsed_secs >= min_time)
+        .filter_map(|r| r.latency_ms.map(|ms| [r.elapsed_secs, ms]))
         .collect();
     let ext_line = Line::new(PlotPoints::new(latency_points))
         .color(egui::Color32::from_rgb(100, 200, 255))
@@ -157,15 +196,28 @@ fn build_external_chart_data(state: &PingState, min_time: f64) -> (Line<'_>, egu
 
     let timeout_points: Vec<[f64; 2]> = state.results
         .iter()
-        .filter(|result| !result.success && result.elapsed_secs >= min_time)
-        .map(|result| [result.elapsed_secs, 0.0])
+        .filter(|r| !r.success && r.elapsed_secs >= min_time)
+        .map(|r| [r.elapsed_secs, 0.0])
         .collect();
     let timeout_markers = egui_plot::Points::new(timeout_points)
         .color(egui::Color32::RED)
         .radius(3.0)
         .name("Timeout");
 
-    (ext_line, timeout_markers)
+    let mut elevated_pts = Vec::new();
+    let mut high_pts = Vec::new();
+    let mut critical_pts = Vec::new();
+
+    for r in state.results.iter().filter(|r| r.elapsed_secs >= min_time) {
+        match PingTier::classify(r.latency_ms, thresholds) {
+            PingTier::Critical => critical_pts.push([r.elapsed_secs, r.latency_ms.unwrap()]),
+            PingTier::High => high_pts.push([r.elapsed_secs, r.latency_ms.unwrap()]),
+            PingTier::Elevated => elevated_pts.push([r.elapsed_secs, r.latency_ms.unwrap()]),
+            PingTier::Normal => {}
+        }
+    }
+
+    (ext_line, timeout_markers, elevated_pts, high_pts, critical_pts)
 }
 
 /// Build gateway chart data, showing only the last `window_secs` worth of points.

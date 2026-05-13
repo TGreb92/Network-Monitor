@@ -25,6 +25,12 @@ pub struct ConfigState {
     pub auto_export_isp: bool,
     pub auto_export_log: bool,
     pub notify_on_loss: bool,
+    pub notify_on_elevated_ping: bool,
+    pub notify_on_high_ping: bool,
+    pub notify_on_critical_ping: bool,
+    pub threshold_elevated: u32,
+    pub threshold_high: u32,
+    pub threshold_critical: u32,
     pub status: Option<(String, Instant)>,
     pub preset_editor: PresetEditorState,
 }
@@ -44,6 +50,12 @@ impl ConfigState {
             auto_export_isp: saved.auto_export_isp,
             auto_export_log: saved.auto_export_log,
             notify_on_loss: saved.notify_on_loss,
+            notify_on_elevated_ping: saved.notify_on_elevated_ping,
+            notify_on_high_ping: saved.notify_on_high_ping,
+            notify_on_critical_ping: saved.notify_on_critical_ping,
+            threshold_elevated: saved.threshold_elevated_ms,
+            threshold_high: saved.threshold_high_ms,
+            threshold_critical: saved.threshold_critical_ms,
             status: None,
             preset_editor: PresetEditorState::new(),
         }
@@ -65,12 +77,18 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
     render_status(ui, cfg);
 
     // Sync export settings to sidebar so exports use the latest values
-    sidebar.export_path = cfg.export_path.clone();
-    sidebar.auto_export_csv = cfg.auto_export_csv;
-    sidebar.auto_export_json = cfg.auto_export_json;
-    sidebar.auto_export_isp = cfg.auto_export_isp;
-    sidebar.auto_export_log = cfg.auto_export_log;
-    sidebar.notify_on_loss = cfg.notify_on_loss;
+    sidebar.exports.export_path = cfg.export_path.clone();
+    sidebar.exports.auto_export_csv = cfg.auto_export_csv;
+    sidebar.exports.auto_export_json = cfg.auto_export_json;
+    sidebar.exports.auto_export_isp = cfg.auto_export_isp;
+    sidebar.exports.auto_export_log = cfg.auto_export_log;
+    sidebar.notifications.notify_on_loss = cfg.notify_on_loss;
+    sidebar.notifications.notify_on_elevated_ping = cfg.notify_on_elevated_ping;
+    sidebar.notifications.notify_on_high_ping = cfg.notify_on_high_ping;
+    sidebar.notifications.notify_on_critical_ping = cfg.notify_on_critical_ping;
+    sidebar.notifications.threshold_elevated_ms = cfg.threshold_elevated;
+    sidebar.notifications.threshold_high_ms = cfg.threshold_high;
+    sidebar.notifications.threshold_critical_ms = cfg.threshold_critical;
 }
 
 fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
@@ -134,7 +152,37 @@ fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
     ui.add_space(8.0);
     ui.heading("🔔 Notifications");
     ui.add_space(4.0);
-    ui.checkbox(&mut cfg.notify_on_loss, "Popup notification on loss event");
+    ui.checkbox(&mut cfg.notify_on_loss, "Toast on loss event");
+
+    ui.add_space(4.0);
+    ui.label("Latency tiers:");
+
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut cfg.notify_on_elevated_ping, "Elevated");
+        ui.add(egui::DragValue::new(&mut cfg.threshold_elevated)
+            .range(1..=cfg.timeout)
+            .suffix(" ms").speed(5));
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut cfg.notify_on_high_ping, "High");
+        ui.add(egui::DragValue::new(&mut cfg.threshold_high)
+            .range(1..=cfg.timeout)
+            .suffix(" ms").speed(5));
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut cfg.notify_on_critical_ping, "Critical");
+        ui.add(egui::DragValue::new(&mut cfg.threshold_critical)
+            .range(1..=cfg.timeout)
+            .suffix(" ms").speed(5));
+    });
+
+    // Auto-fix ordering: elevated <= high <= critical
+    if cfg.threshold_high < cfg.threshold_elevated {
+        cfg.threshold_high = cfg.threshold_elevated;
+    }
+    if cfg.threshold_critical < cfg.threshold_high {
+        cfg.threshold_critical = cfg.threshold_high;
+    }
 }
 
 fn render_buttons(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
@@ -160,7 +208,7 @@ fn render_status(ui: &mut egui::Ui, cfg: &ConfigState) {
     }
 }
 
-fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &SidebarState) {
+fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
     let target = sidebar.selected_host();
     let mut shared = lock_state(&state);
     shared.config = PingConfig {
@@ -189,9 +237,24 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &SidebarS
         auto_export_isp: cfg.auto_export_isp,
         auto_export_log: cfg.auto_export_log,
         notify_on_loss: cfg.notify_on_loss,
+        notify_on_elevated_ping: cfg.notify_on_elevated_ping,
+        notify_on_high_ping: cfg.notify_on_high_ping,
+        notify_on_critical_ping: cfg.notify_on_critical_ping,
+        threshold_elevated_ms: cfg.threshold_elevated,
+        threshold_high_ms: cfg.threshold_high,
+        threshold_critical_ms: cfg.threshold_critical,
     };
     match config::save(&saved) {
         Ok(()) => cfg.status = Some(("✅ Config saved".into(), Instant::now())),
         Err(err) => cfg.status = Some((format!("❌ Save failed: {}", err), Instant::now())),
     }
+
+    // Push notification config into the live notification state
+    sidebar.notifications.notify_on_loss = cfg.notify_on_loss;
+    sidebar.notifications.notify_on_elevated_ping = cfg.notify_on_elevated_ping;
+    sidebar.notifications.notify_on_high_ping = cfg.notify_on_high_ping;
+    sidebar.notifications.notify_on_critical_ping = cfg.notify_on_critical_ping;
+    sidebar.notifications.threshold_elevated_ms = cfg.threshold_elevated;
+    sidebar.notifications.threshold_high_ms = cfg.threshold_high;
+    sidebar.notifications.threshold_critical_ms = cfg.threshold_critical;
 }

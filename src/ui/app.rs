@@ -44,11 +44,8 @@ impl NetworkMonitorApp {
         }
 
         let mut sidebar = SidebarState::new(saved.presets.clone(), saved.selected_preset, saved.export_path.clone());
-        sidebar.auto_export_csv = saved.auto_export_csv;
-        sidebar.auto_export_json = saved.auto_export_json;
-        sidebar.auto_export_isp = saved.auto_export_isp;
-        sidebar.auto_export_log = saved.auto_export_log;
-        sidebar.notify_on_loss = saved.notify_on_loss;
+        sidebar.exports = crate::ui::components::export_import::ExportState::from_saved(&saved);
+        sidebar.notifications = crate::ui::components::notifications::NotificationState::from_saved(&saved);
 
         Self {
             state,

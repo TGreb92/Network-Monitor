@@ -1,40 +1,32 @@
 //! # Sidebar - Controls panel
 //!
-//! Target selector, Start/Stop, gateway detection, quick stats, and export.
+//! Target selector, Start/Stop, gateway detection, quick stats.
+//! Export/import and notifications are delegated to their own components.
 
 use eframe::egui;
-use std::time::Instant;
 
 use crate::core::config::TargetPreset;
-use crate::core::export;
 use crate::core::pinger;
 use crate::core::state::{SharedState, lock_state};
 
+use super::export_import::ExportState;
+use super::notifications::NotificationState;
+
 /// Sidebar-specific state
 pub struct SidebarState {
-    pub export_status: Option<(String, Instant)>,
     pub presets: Vec<TargetPreset>,
     pub selected_preset: usize,
-    pub export_path: String,
-    pub auto_export_csv: bool,
-    pub auto_export_json: bool,
-    pub auto_export_isp: bool,
-    pub auto_export_log: bool,
-    pub notify_on_loss: bool,
+    pub exports: ExportState,
+    pub notifications: NotificationState,
 }
 
 impl SidebarState {
     pub fn new(presets: Vec<TargetPreset>, selected_preset: usize, export_path: String) -> Self {
         Self {
-            export_status: None,
             presets,
             selected_preset,
-            export_path,
-            auto_export_csv: false,
-            auto_export_json: false,
-            auto_export_isp: false,
-            auto_export_log: false,
-            notify_on_loss: false,
+            exports: ExportState::new(export_path),
+            notifications: NotificationState::new(),
         }
     }
 
@@ -79,11 +71,8 @@ fn read_sidebar_snapshot(state: &SharedState) -> SidebarSnapshot {
 pub fn render(ctx: &egui::Context, state: &SharedState, sidebar: &mut SidebarState) {
     let snapshot = read_sidebar_snapshot(state);
 
-    // Check if pinger auto-stopped and needs auto-export
-    check_auto_export_pending(state, sidebar);
-
-    // Sync notification setting and check for pending loss notifications
-    sync_and_check_notifications(ctx, state, sidebar);
+    super::export_import::check_auto_export_pending(state, &mut sidebar.exports);
+    super::notifications::sync_and_fire(ctx, state, &sidebar.notifications);
 
     egui::SidePanel::left("control_panel")
         .resizable(true)
@@ -97,7 +86,9 @@ pub fn render(ctx: &egui::Context, state: &SharedState, sidebar: &mut SidebarSta
             ui.separator();
             render_quick_stats(ui, &snapshot);
             ui.separator();
-            render_export(ui, state, sidebar);
+            super::notifications::render_mute_toggle(ui, &mut sidebar.notifications);
+            ui.separator();
+            super::export_import::render(ui, state, &mut sidebar.exports);
         });
 }
 
@@ -128,7 +119,6 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
             }
         });
 
-    // Apply new target to shared state if selection changed
     if sidebar.selected_preset != old_selection {
         let new_host = sidebar.selected_host();
         let mut shared = lock_state(&state);
@@ -148,7 +138,7 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut Sideb
             shared.flush_partial_report();
             shared.running = false;
             drop(shared);
-            run_auto_export_if_enabled(state, sidebar);
+            super::export_import::run_auto_export(state, &mut sidebar.exports);
         }
         ui.colored_label(egui::Color32::from_rgb(100, 255, 100), "● RUNNING");
         ui.label(format!("⏱ Elapsed: {}", snap.elapsed_display));
@@ -197,178 +187,4 @@ fn render_quick_stats(ui: &mut egui::Ui, snap: &SidebarSnapshot) {
     ui.label(format!("Loss: {:.1}%", snap.loss_pct));
     ui.label(format!("Lost: {}", lost));
     ui.label(format!("Loss events: {}", snap.loss_batches));
-}
-
-fn render_export(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarState) {
-    ui.heading("📥 Export");
-    ui.horizontal(|ui| {
-        if ui.button("CSV").clicked() { do_export(state, sidebar, "csv"); }
-        if ui.button("JSON").clicked() { do_export(state, sidebar, "json"); }
-    });
-    if ui.button("📋 ISP Report").on_hover_text("Human-readable report for your ISP").clicked() {
-        do_export(state, sidebar, "txt");
-    }
-    if ui.button("🖥 Console Log").on_hover_text("Raw ping log output").clicked() {
-        do_export(state, sidebar, "log");
-    }
-
-    ui.add_space(8.0);
-    ui.separator();
-    ui.heading("📂 Import");
-    if ui.button("📥 Load JSON…").on_hover_text("Import a previous JSON export to review").clicked() {
-        do_import(state, sidebar);
-    }
-
-    // Show status message for 5 seconds
-    if let Some((text, when)) = &sidebar.export_status {
-        if when.elapsed().as_secs() < 5 {
-            ui.colored_label(egui::Color32::from_rgb(150, 200, 150), text);
-        }
-    }
-}
-
-fn do_export(state: &SharedState, sidebar: &mut SidebarState, format: &str) {
-    // Clone state and release lock before doing file I/O
-    let snapshot = lock_state(state).clone();
-
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("network-monitor-{}.{}", timestamp, format);
-    let export_dir = match export::export_dir(&sidebar.export_path) {
-        Ok(dir) => dir,
-        Err(err) => {
-            sidebar.export_status = Some((format!("❌ {}", err), Instant::now()));
-            return;
-        }
-    };
-    let path = export_dir.join(&filename);
-
-    let result = match format {
-        "csv" => export::write_csv(&path, &snapshot),
-        "json" => export::write_json(&path, &snapshot),
-        "txt" => export::write_isp_report(&path, &snapshot),
-        "log" => export::write_console_log(&path, &snapshot),
-        _ => Ok(()),
-    };
-
-    match result {
-        Ok(()) => sidebar.export_status = Some((format!("✅ Saved {}", filename), Instant::now())),
-        Err(err) => sidebar.export_status = Some((format!("❌ {}", err), Instant::now())),
-    }
-}
-
-fn do_import(state: &SharedState, sidebar: &mut SidebarState) {
-    let file = rfd::FileDialog::new()
-        .set_title("Import JSON export")
-        .add_filter("JSON files", &["json"])
-        .pick_file();
-
-    let Some(path) = file else {
-        return;
-    };
-
-    match export::read_json(&path) {
-        Ok(imported) => {
-            let mut shared = lock_state(&state);
-            // Stop any running test before replacing state
-            shared.running = false;
-            // Replace all data with imported data
-            shared.config = imported.config;
-            shared.results = imported.results;
-            shared.log_entries = imported.log_entries;
-            shared.interval_reports = imported.interval_reports;
-            shared.all_latencies = imported.all_latencies;
-            shared.total_sent = imported.total_sent;
-            shared.total_received = imported.total_received;
-            shared.seq_counter = imported.seq_counter;
-            shared.jitter = imported.jitter;
-            shared.gateway = imported.gateway;
-            shared.loss_tracker = imported.loss_tracker;
-            shared.interval = imported.interval;
-            shared.start_time = None;
-            shared.config_changed = false;
-
-            let filename = path.file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "file".into());
-            sidebar.export_status = Some((
-                format!("✅ Imported {}", filename),
-                Instant::now(),
-            ));
-        }
-        Err(err) => {
-            sidebar.export_status = Some((format!("❌ {}", err), Instant::now()));
-        }
-    }
-}
-
-/// Check if the pinger auto-stopped and there's a pending auto-export
-fn check_auto_export_pending(state: &SharedState, sidebar: &mut SidebarState) {
-    let pending = {
-        let shared = lock_state(&state);
-        shared.auto_export_pending
-    };
-
-    if pending {
-        run_auto_export_if_enabled(state, sidebar);
-        let mut shared = lock_state(&state);
-        shared.auto_export_pending = false;
-    }
-}
-
-/// Run auto-export for all enabled formats
-fn run_auto_export_if_enabled(state: &SharedState, sidebar: &mut SidebarState) {
-    let any_enabled = sidebar.auto_export_csv || sidebar.auto_export_json
-        || sidebar.auto_export_isp || sidebar.auto_export_log;
-    if !any_enabled {
-        return;
-    }
-
-    // Clone state and release lock before doing file I/O
-    let snapshot = lock_state(state).clone();
-
-    let msg = export::run_auto_export(
-        &snapshot,
-        &sidebar.export_path,
-        sidebar.auto_export_csv,
-        sidebar.auto_export_json,
-        sidebar.auto_export_isp,
-        sidebar.auto_export_log,
-    );
-
-    sidebar.export_status = Some((msg, Instant::now()));
-}
-
-/// Sync notification config to shared state and check for pending loss notifications
-fn sync_and_check_notifications(ctx: &egui::Context, state: &SharedState, sidebar: &SidebarState) {
-    let mut shared = lock_state(&state);
-    shared.notify_loss_enabled = sidebar.notify_on_loss;
-
-    if shared.notify_loss_pending {
-        shared.notify_loss_pending = false;
-        let target = shared.config.target.clone();
-        let loss_count = shared.loss_tracker.count;
-        drop(shared);
-
-        show_loss_notification(ctx, &target, loss_count);
-    }
-}
-
-/// Show a Windows toast notification for a loss event
-fn show_loss_notification(_ctx: &egui::Context, target: &str, loss_count: u64) {
-    let body = format!(
-        "Loss event #{} on {}\nStarted at {}",
-        loss_count,
-        target,
-        chrono::Local::now().format("%H:%M:%S"),
-    );
-
-    // Call directly on the UI thread - toast notifications are non-blocking,
-    // they just register with Windows and return immediately.
-    // Spawning a thread here would initialize COM with the wrong threading
-    // model, corrupting the window message pump and preventing focus.
-    let _ = notify_rust::Notification::new()
-        .summary("Network Monitor - Loss Detected")
-        .body(&body)
-        .timeout(notify_rust::Timeout::Milliseconds(5000))
-        .show();
 }

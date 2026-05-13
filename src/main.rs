@@ -14,6 +14,22 @@ use core::config;
 use core::state::{new_shared_state, PingConfig};
 
 fn main() -> eframe::Result<()> {
+    // SAFETY: CoInitializeEx is a Windows API that sets the COM threading model
+    // for the current thread. We must call this before eframe starts because
+    // notify-rust (toast notifications) and rfd (file dialogs) both use COM
+    // internally. If COM is first initialized on a background thread with
+    // COINIT_MULTITHREADED, it conflicts with the STA model that eframe/winit
+    // needs for the window message pump, making the window unfocusable.
+    // The call is safe: it only affects thread-local COM state and returns
+    // an HRESULT that we intentionally ignore (S_FALSE if already initialized).
+    #[cfg(windows)]
+    unsafe {
+        windows_sys::Win32::System::Com::CoInitializeEx(
+            std::ptr::null(),
+            windows_sys::Win32::System::Com::COINIT_APARTMENTTHREADED as u32,
+        );
+    }
+
     let saved = config::load();
     let ping_config = PingConfig::from_saved(&saved);
     let shared = new_shared_state(ping_config);

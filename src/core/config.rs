@@ -40,7 +40,29 @@ pub struct SavedConfig {
     /// Show a popup notification when a loss event starts
     #[serde(default)]
     pub notify_on_loss: bool,
+    /// Toast on elevated ping (>= elevated threshold)
+    #[serde(default)]
+    pub notify_on_elevated_ping: bool,
+    /// Toast on high ping (>= high threshold)
+    #[serde(default)]
+    pub notify_on_high_ping: bool,
+    /// Toast on critical ping (>= critical threshold)
+    #[serde(default)]
+    pub notify_on_critical_ping: bool,
+    /// Elevated ping threshold in ms
+    #[serde(default = "default_elevated_threshold")]
+    pub threshold_elevated_ms: u32,
+    /// High ping threshold in ms
+    #[serde(default = "default_high_threshold")]
+    pub threshold_high_ms: u32,
+    /// Critical ping threshold in ms
+    #[serde(default = "default_critical_threshold")]
+    pub threshold_critical_ms: u32,
 }
+
+fn default_elevated_threshold() -> u32 { 100 }
+fn default_high_threshold() -> u32 { 200 }
+fn default_critical_threshold() -> u32 { 500 }
 
 impl Default for SavedConfig {
     fn default() -> Self {
@@ -59,6 +81,12 @@ impl Default for SavedConfig {
             auto_export_isp: false,
             auto_export_log: false,
             notify_on_loss: false,
+            notify_on_elevated_ping: false,
+            notify_on_high_ping: false,
+            notify_on_critical_ping: false,
+            threshold_elevated_ms: 100,
+            threshold_high_ms: 200,
+            threshold_critical_ms: 500,
         }
     }
 }

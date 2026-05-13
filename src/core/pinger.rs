@@ -128,7 +128,7 @@ fn check_and_stop_if_duration_exceeded(state: &SharedState, duration_secs: u64) 
         shared.push_log(format!(
             "[{}] ⏱ Test duration reached - stopped automatically",
             chrono::Local::now().naive_local().format("%H:%M:%S")
-        ));
+        ), None, true);
         true
     } else {
         false
@@ -182,7 +182,7 @@ fn record_ping_result(
     } else {
         format!("[{}] #{} Request timed out ({})", now.format("%H:%M:%S"), seq, output_line)
     };
-    shared.push_log(log_msg);
+    shared.push_log(log_msg, latency_ms, success);
 
     accumulate_interval(&mut shared, result, now, interval_secs);
 }
