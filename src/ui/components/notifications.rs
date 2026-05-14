@@ -3,18 +3,18 @@
 //! Syncs notification config to shared state, checks for pending events,
 //! and fires Windows toast notifications via notify-rust.
 //! Supports 3 latency tiers (Elevated, High, Critical) plus loss events.
-//! Enforces a cooldown between toasts to prevent notification spam.
+//! Enforces a cooldown between consecutive toasts to prevent notification spam.
 
 use std::time::Instant;
 use eframe::egui;
 
-use crate::core::state::{SharedState, PingThresholds, PingTier, lock_state};
+use crate::core::state::{SharedState, PingState, PingThresholds, PingTier, lock_state};
 
 /// Minimum seconds between consecutive toast notifications
 const TOAST_COOLDOWN_SECS: f64 = 5.0;
 
-/// Notification preferences (persisted via config)
-pub struct NotificationState {
+/// User-configurable notification preferences (persisted via config)
+pub struct NotificationPrefs {
     pub notify_on_loss: bool,
     pub notify_on_gw_loss: bool,
     pub notify_on_elevated_ping: bool,
@@ -23,14 +23,9 @@ pub struct NotificationState {
     pub threshold_elevated_ms: u32,
     pub threshold_high_ms: u32,
     pub threshold_critical_ms: u32,
-    pub muted: bool,
-    /// Last time a toast was fired (for cooldown)
-    last_toast_time: Option<Instant>,
-    /// Severity of the last toast (higher can override cooldown)
-    last_toast_severity: PingTier,
 }
 
-impl NotificationState {
+impl NotificationPrefs {
     pub fn new() -> Self {
         Self {
             notify_on_loss: false,
@@ -41,6 +36,24 @@ impl NotificationState {
             threshold_elevated_ms: 100,
             threshold_high_ms: 200,
             threshold_critical_ms: 500,
+        }
+    }
+}
+
+/// Notification state: preferences + mute + cooldown tracking
+pub struct NotificationState {
+    pub prefs: NotificationPrefs,
+    pub muted: bool,
+    /// Last time a toast was fired (for cooldown)
+    last_toast_time: Option<Instant>,
+    /// Severity of the last toast (higher can override cooldown)
+    last_toast_severity: PingTier,
+}
+
+impl NotificationState {
+    pub fn new() -> Self {
+        Self {
+            prefs: NotificationPrefs::new(),
             muted: false,
             last_toast_time: None,
             last_toast_severity: PingTier::Normal,
@@ -49,14 +62,16 @@ impl NotificationState {
 
     pub fn from_saved(saved: &crate::core::config::SavedConfig) -> Self {
         Self {
-            notify_on_loss: saved.notify_on_loss,
-            notify_on_gw_loss: saved.notify_on_gw_loss,
-            notify_on_elevated_ping: saved.notify_on_elevated_ping,
-            notify_on_high_ping: saved.notify_on_high_ping,
-            notify_on_critical_ping: saved.notify_on_critical_ping,
-            threshold_elevated_ms: saved.threshold_elevated_ms,
-            threshold_high_ms: saved.threshold_high_ms,
-            threshold_critical_ms: saved.threshold_critical_ms,
+            prefs: NotificationPrefs {
+                notify_on_loss: saved.notify_on_loss,
+                notify_on_gw_loss: saved.notify_on_gw_loss,
+                notify_on_elevated_ping: saved.notify_on_elevated_ping,
+                notify_on_high_ping: saved.notify_on_high_ping,
+                notify_on_critical_ping: saved.notify_on_critical_ping,
+                threshold_elevated_ms: saved.threshold_elevated_ms,
+                threshold_high_ms: saved.threshold_high_ms,
+                threshold_critical_ms: saved.threshold_critical_ms,
+            },
             muted: false,
             last_toast_time: None,
             last_toast_severity: PingTier::Normal,
@@ -69,17 +84,7 @@ impl NotificationState {
 pub fn sync_and_fire(ctx: &egui::Context, state: &SharedState, notif: &mut NotificationState) {
     let mut shared = lock_state(&state);
 
-    // Push config into shared state so the pinger can set pending flags
-    shared.notify_loss_enabled = notif.notify_on_loss;
-    shared.gateway.notify_loss_enabled = notif.notify_on_gw_loss;
-    shared.thresholds = PingThresholds {
-        elevated_ms: notif.threshold_elevated_ms as f64,
-        high_ms: notif.threshold_high_ms as f64,
-        critical_ms: notif.threshold_critical_ms as f64,
-    };
-    shared.ping_tiers.set_enabled(PingTier::Elevated, notif.notify_on_elevated_ping);
-    shared.ping_tiers.set_enabled(PingTier::High, notif.notify_on_high_ping);
-    shared.ping_tiers.set_enabled(PingTier::Critical, notif.notify_on_critical_ping);
+    sync_prefs_to_shared(&mut shared, &notif.prefs);
 
     if notif.muted {
         shared.notify_loss_pending = false;
@@ -88,60 +93,20 @@ pub fn sync_and_fire(ctx: &egui::Context, state: &SharedState, notif: &mut Notif
         return;
     }
 
-    // Check if cooldown has expired - reset severity tracking if so
     let in_cooldown = notif.last_toast_time
         .is_some_and(|t| t.elapsed().as_secs_f64() < TOAST_COOLDOWN_SECS);
     if !in_cooldown {
         notif.last_toast_severity = PingTier::Normal;
     }
 
-    // Determine the highest-severity pending event (peek without clearing)
-    let target = shared.config.target.clone();
-    let thresholds = shared.thresholds.clone();
+    let pending = select_pending_toast(&shared, &notif.prefs);
 
-    let mut severity = PingTier::Normal;
-    let mut toast: Option<(String, String)> = None;
+    let (severity, toast) = match pending {
+        Some(v) => v,
+        None => return,
+    };
 
-    // Check tier notifications (highest first)
-    if let Some(tier) = shared.ping_tiers.highest_pending() {
-        if tier > severity {
-            severity = tier;
-            let count = shared.ping_tiers.count(tier);
-            let threshold = tier.threshold(&thresholds) as u32;
-            toast = Some((tier.label().to_string(), format!(
-                "{} #{} on {} (>= {}ms)\nDetected at {}",
-                tier.label(), count, target, threshold,
-                chrono::Local::now().format("%H:%M:%S"),
-            )));
-        }
-    }
-
-    // Loss is highest priority (external and gateway)
-    if shared.notify_loss_pending && shared.notify_loss_enabled {
-        severity = PingTier::Loss;
-        let count = shared.loss_tracker.count;
-        toast = Some(("Loss Detected".to_string(), format!(
-            "Loss event #{} on {}\nStarted at {}",
-            count, target, chrono::Local::now().format("%H:%M:%S"),
-        )));
-    }
-
-    if shared.gateway.notify_loss_pending && shared.gateway.notify_loss_enabled {
-        let gw_ip = shared.gateway.ip.as_deref().unwrap_or("gateway").to_string();
-        let count = shared.gateway.loss_tracker.count;
-        // Only override if we haven't already queued an external loss
-        if severity < PingTier::Loss {
-            severity = PingTier::Loss;
-        }
-        toast = Some(("Gateway Loss".to_string(), format!(
-            "Gateway loss #{} on {}\nStarted at {}",
-            count, gw_ip, chrono::Local::now().format("%H:%M:%S"),
-        )));
-    }
-
-    // Fire if: cooldown expired, OR this is higher severity than the last toast
-    let should_fire = severity > PingTier::Normal
-        && (!in_cooldown || severity > notif.last_toast_severity);
+    let should_fire = !in_cooldown || severity > notif.last_toast_severity;
 
     if should_fire {
         if severity == PingTier::Loss {
@@ -157,6 +122,74 @@ pub fn sync_and_fire(ctx: &egui::Context, state: &SharedState, notif: &mut Notif
         show_toast(ctx, &summary, &body);
         notif.last_toast_time = Some(Instant::now());
         notif.last_toast_severity = severity;
+    }
+}
+
+/// Push notification preferences into shared state
+fn sync_prefs_to_shared(shared: &mut PingState, prefs: &NotificationPrefs) {
+    shared.notify_loss_enabled = prefs.notify_on_loss;
+    shared.gateway.notify_loss_enabled = prefs.notify_on_gw_loss;
+    shared.thresholds = PingThresholds {
+        elevated_ms: prefs.threshold_elevated_ms as f64,
+        high_ms: prefs.threshold_high_ms as f64,
+        critical_ms: prefs.threshold_critical_ms as f64,
+    };
+    shared.ping_tiers.set_enabled(PingTier::Elevated, prefs.notify_on_elevated_ping);
+    shared.ping_tiers.set_enabled(PingTier::High, prefs.notify_on_high_ping);
+    shared.ping_tiers.set_enabled(PingTier::Critical, prefs.notify_on_critical_ping);
+}
+
+/// Pure decision function: determine the highest-severity pending event
+fn select_pending_toast(
+    shared: &PingState,
+    prefs: &NotificationPrefs,
+) -> Option<(PingTier, Option<(String, String)>)> {
+    let target = &shared.config.target;
+    let thresholds = &shared.thresholds;
+
+    let mut severity = PingTier::Normal;
+    let mut toast: Option<(String, String)> = None;
+
+    // Check tier notifications (highest first)
+    if let Some(tier) = shared.ping_tiers.highest_pending() {
+        if tier > severity {
+            severity = tier;
+            let count = shared.ping_tiers.count(tier);
+            let threshold = tier.threshold(thresholds) as u32;
+            toast = Some((tier.label().to_string(), format!(
+                "{} #{} on {} (>= {}ms)\nDetected at {}",
+                tier.label(), count, target, threshold,
+                chrono::Local::now().format("%H:%M:%S"),
+            )));
+        }
+    }
+
+    // Loss is highest priority (external and gateway)
+    if shared.notify_loss_pending && prefs.notify_on_loss {
+        severity = PingTier::Loss;
+        let count = shared.loss_tracker.count;
+        toast = Some(("Loss Detected".to_string(), format!(
+            "Loss event #{} on {}\nStarted at {}",
+            count, target, chrono::Local::now().format("%H:%M:%S"),
+        )));
+    }
+
+    if shared.gateway.notify_loss_pending && prefs.notify_on_gw_loss {
+        let gw_ip = shared.gateway.ip.as_deref().unwrap_or("gateway").to_string();
+        let count = shared.gateway.loss_tracker.count;
+        if severity < PingTier::Loss {
+            severity = PingTier::Loss;
+        }
+        toast = Some(("Gateway Loss".to_string(), format!(
+            "Gateway loss #{} on {}\nStarted at {}",
+            count, gw_ip, chrono::Local::now().format("%H:%M:%S"),
+        )));
+    }
+
+    if severity > PingTier::Normal {
+        Some((severity, toast))
+    } else {
+        None
     }
 }
 

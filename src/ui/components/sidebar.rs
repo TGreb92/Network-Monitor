@@ -7,6 +7,7 @@ use eframe::egui;
 
 use crate::core::config::TargetPreset;
 use crate::core::pinger;
+use crate::core::preset_packs::SavedPresetPack;
 use crate::core::state::{SharedState, lock_state};
 
 use super::export_import::ExportState;
@@ -18,6 +19,8 @@ pub struct SidebarState {
     pub selected_preset: usize,
     /// Currently loaded pack name (None = custom/default)
     pub selected_pack_name: Option<String>,
+    /// Cached packs (builtin + custom) to avoid per-frame disk I/O
+    pub cached_packs: Vec<SavedPresetPack>,
     pub exports: ExportState,
     pub notifications: NotificationState,
 }
@@ -28,6 +31,7 @@ impl SidebarState {
             presets,
             selected_preset,
             selected_pack_name: None,
+            cached_packs: Vec::new(),
             exports: ExportState::new(export_path),
             notifications: NotificationState::new(),
         }
@@ -97,11 +101,13 @@ pub fn render(ctx: &egui::Context, state: &SharedState, sidebar: &mut SidebarSta
 
 fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarState) {
     ui.heading("🎯 Target");
+    render_pack_dropdown(ui, state, sidebar);
+    ui.add_space(4.0);
+    render_preset_dropdown(ui, state, sidebar);
+}
 
-    // Pack dropdown
+fn render_pack_dropdown(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarState) {
     let pack_label = sidebar.selected_pack_name.clone().unwrap_or_else(|| "Custom".into());
-    let packs_config = crate::core::preset_packs::load();
-    let full_packs = crate::core::preset_packs::all_packs(&packs_config.custom_packs);
 
     let old_pack = sidebar.selected_pack_name.clone();
     egui::ComboBox::from_id_salt("sidebar_pack_selector")
@@ -111,7 +117,7 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
             if ui.selectable_label(sidebar.selected_pack_name.is_none(), "Custom").clicked() {
                 sidebar.selected_pack_name = None;
             }
-            for pack in &full_packs {
+            for pack in &sidebar.cached_packs {
                 let selected = sidebar.selected_pack_name.as_deref() == Some(&pack.name);
                 if ui.selectable_label(selected, &pack.name).clicked() {
                     sidebar.selected_pack_name = Some(pack.name.clone());
@@ -128,10 +134,9 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
             shared.config.test_mode = preset.mode.clone();
         }
     }
+}
 
-    ui.add_space(4.0);
-
-    // Preset dropdown
+fn render_preset_dropdown(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarState) {
     if sidebar.presets.is_empty() {
         ui.label("No presets configured");
         return;

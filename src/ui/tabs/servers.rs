@@ -65,58 +65,16 @@ pub fn render(ui: &mut egui::Ui, all_packs: &[SavedPresetPack], servers: &mut Se
             ui.heading("🎮 Server Connectivity");
             ui.add_space(4.0);
 
-            // Pack selector dropdown
-            let current_label = servers.selected_server_pack.clone().unwrap_or_else(|| "Current presets".into());
-            ui.horizontal(|ui| {
-                ui.label("Pack:");
-                egui::ComboBox::from_id_salt("server_pack_selector")
-                    .selected_text(&current_label)
-                    .show_ui(ui, |ui| {
-                        if ui.selectable_label(servers.selected_server_pack.is_none(), "Current presets").clicked() {
-                            servers.selected_server_pack = None;
-                            servers.testing_presets = sidebar.presets.clone();
-                        }
-                        for pack in all_packs {
-                            let selected = servers.selected_server_pack.as_deref() == Some(&pack.name);
-                            if ui.selectable_label(selected, &pack.name).clicked() {
-                                servers.selected_server_pack = Some(pack.name.clone());
-                                servers.testing_presets = pack.presets.clone();
-                            }
-                        }
-                    });
-            });
+            render_pack_selector(ui, all_packs, servers, sidebar);
             ui.add_space(4.0);
 
-            // Use testing_presets if populated, otherwise fall back to sidebar presets
-            let presets: Vec<TargetPreset> = if servers.testing_presets.is_empty() {
+            let presets = if servers.testing_presets.is_empty() {
                 sidebar.presets.clone()
             } else {
                 servers.testing_presets.clone()
             };
 
-            ui.horizontal(|ui| {
-                let btn_text = if servers.checking { "⏳ Checking..." } else { "🔍 Check All" };
-                if ui.add_enabled(!servers.checking, egui::Button::new(btn_text)).clicked() {
-                    start_check_all(&presets, servers);
-                }
-
-                if !servers.results.is_empty() {
-                    let ok_count = servers.results.iter().filter(|r| matches!(r.status, CheckStatus::Ok)).count();
-                    let total = servers.results.len();
-                    ui.label(format!("{}/{} reachable", ok_count, total));
-
-                    if let Some(first) = servers.results.first() {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("Last check: {}", first.checked_at.format("%H:%M:%S")))
-                                    .small()
-                                    .weak(),
-                            );
-                        });
-                    }
-                }
-            });
-
+            render_check_controls(ui, &presets, servers);
             ui.add_space(8.0);
 
             if servers.results.is_empty() && !servers.checking {
@@ -124,7 +82,6 @@ pub fn render(ui: &mut egui::Ui, all_packs: &[SavedPresetPack], servers: &mut Se
                 return;
             }
 
-            // Group results by category
             let categories: Vec<String> = {
                 let mut cats: Vec<String> = servers.results.iter()
                     .map(|r| if r.category.is_empty() { "Other".to_string() } else { r.category.clone() })
@@ -147,6 +104,53 @@ pub fn render(ui: &mut egui::Ui, all_packs: &[SavedPresetPack], servers: &mut Se
                 }
             }
         });
+}
+
+fn render_pack_selector(ui: &mut egui::Ui, all_packs: &[SavedPresetPack], servers: &mut ServersState, sidebar: &SidebarState) {
+    let current_label = servers.selected_server_pack.clone().unwrap_or_else(|| "Current presets".into());
+    ui.horizontal(|ui| {
+        ui.label("Pack:");
+        egui::ComboBox::from_id_salt("server_pack_selector")
+            .selected_text(&current_label)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(servers.selected_server_pack.is_none(), "Current presets").clicked() {
+                    servers.selected_server_pack = None;
+                    servers.testing_presets = sidebar.presets.clone();
+                }
+                for pack in all_packs {
+                    let selected = servers.selected_server_pack.as_deref() == Some(&pack.name);
+                    if ui.selectable_label(selected, &pack.name).clicked() {
+                        servers.selected_server_pack = Some(pack.name.clone());
+                        servers.testing_presets = pack.presets.clone();
+                    }
+                }
+            });
+    });
+}
+
+fn render_check_controls(ui: &mut egui::Ui, presets: &[TargetPreset], servers: &mut ServersState) {
+    ui.horizontal(|ui| {
+        let btn_text = if servers.checking { "⏳ Checking..." } else { "🔍 Check All" };
+        if ui.add_enabled(!servers.checking, egui::Button::new(btn_text)).clicked() {
+            start_check_all(presets, servers);
+        }
+
+        if !servers.results.is_empty() {
+            let ok_count = servers.results.iter().filter(|r| matches!(r.status, CheckStatus::Ok)).count();
+            let total = servers.results.len();
+            ui.label(format!("{}/{} reachable", ok_count, total));
+
+            if let Some(first) = servers.results.first() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Last check: {}", first.checked_at.format("%H:%M:%S")))
+                            .small()
+                            .weak(),
+                    );
+                });
+            }
+        }
+    });
 }
 
 fn render_results_table(ui: &mut egui::Ui, title: &str, results: &[&ServerCheckResult]) {

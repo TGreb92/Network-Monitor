@@ -140,9 +140,3 @@ pub fn import_pack_json(path: &std::path::Path) -> Result<SavedPresetPack, Strin
         .map_err(|e| format!("Invalid pack JSON: {}", e))
 }
 
-/// Get all packs (builtins + custom) as a flat list
-pub fn all_packs(custom: &[SavedPresetPack]) -> Vec<SavedPresetPack> {
-    let mut all = builtin_packs();
-    all.extend(custom.iter().cloned());
-    all
-}

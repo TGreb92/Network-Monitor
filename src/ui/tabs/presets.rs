@@ -9,25 +9,37 @@ use crate::core::preset_packs::{self, SavedPresetPack, builtin_packs};
 use crate::ui::components::presets::{self, PresetEditorState};
 use crate::ui::components::sidebar::SidebarState;
 
+/// Pack management state (selection, renaming, import/export)
+pub struct PackManagerState {
+    pub selected: Option<usize>,
+    pub new_name: String,
+    pub show_save_form: bool,
+    pub renaming: Option<usize>,
+    pub rename_text: String,
+    pub import_preview: Option<SavedPresetPack>,
+    pub show_import_confirm: bool,
+}
+
+impl PackManagerState {
+    pub fn new() -> Self {
+        Self {
+            selected: None,
+            new_name: String::new(),
+            show_save_form: false,
+            renaming: None,
+            rename_text: String::new(),
+            import_preview: None,
+            show_import_confirm: false,
+        }
+    }
+}
+
 /// State for the Presets tab
 pub struct PresetsTabState {
     /// User-created preset packs
     pub custom_packs: Vec<SavedPresetPack>,
-    /// Name input for saving a new pack
-    pub new_pack_name: String,
-    /// Whether the "save as pack" form is visible
-    pub show_save_pack: bool,
-    /// Currently selected pack index (None = no selection)
-    /// Indexes into a combined list: builtins first, then custom_packs
-    pub selected_pack: Option<usize>,
-    /// Index of custom pack being renamed (None = not renaming)
-    pub renaming_pack: Option<usize>,
-    /// Text buffer for the rename input
-    pub rename_pack_text: String,
-    /// Preview of an imported pack awaiting confirmation
-    pub import_preview: Option<SavedPresetPack>,
-    /// Whether the import confirmation panel is shown
-    pub show_import_confirm: bool,
+    /// Pack manager state (selection, renaming, import/export)
+    pub pack_manager: PackManagerState,
     /// Individual preset editor state
     pub preset_editor: PresetEditorState,
     /// Local preset list for editing (independent from sidebar)
@@ -42,13 +54,7 @@ impl PresetsTabState {
     pub fn from_packs_config(packs: &preset_packs::PacksConfig) -> Self {
         Self {
             custom_packs: packs.custom_packs.clone(),
-            new_pack_name: String::new(),
-            show_save_pack: false,
-            selected_pack: None,
-            renaming_pack: None,
-            rename_pack_text: String::new(),
-            import_preview: None,
-            show_import_confirm: false,
+            pack_manager: PackManagerState::new(),
             preset_editor: PresetEditorState::new(),
             editing_presets: crate::core::config::default_presets(),
             editing_selected: 0,
@@ -154,10 +160,10 @@ fn render_builtin_packs(
     actions: &mut PackActions,
 ) {
     for (idx, pack) in builtins.iter().enumerate() {
-        let is_selected = state.selected_pack == Some(idx);
+        let is_selected = state.pack_manager.selected == Some(idx);
         ui.horizontal(|ui| {
             if ui.selectable_label(is_selected, format!("🔒 {}", pack.name)).clicked() {
-                state.selected_pack = Some(idx);
+                state.pack_manager.selected = Some(idx);
                 state.editing_presets = pack.presets.clone();
                 state.editing_selected = 0;
             }
@@ -181,8 +187,8 @@ fn render_custom_packs(
     let pack_count = state.custom_packs.len();
     for idx in 0..pack_count {
         let combined_idx = builtin_count + idx;
-        let is_selected = state.selected_pack == Some(combined_idx);
-        let is_renaming = state.renaming_pack == Some(idx);
+        let is_selected = state.pack_manager.selected == Some(combined_idx);
+        let is_renaming = state.pack_manager.renaming == Some(idx);
 
         if is_renaming {
             render_renaming_row(ui, state, actions);
@@ -191,7 +197,7 @@ fn render_custom_packs(
             let preset_count = state.custom_packs[idx].presets.len();
             ui.horizontal(|ui| {
                 if ui.selectable_label(is_selected, format!("👤 {}", name)).clicked() {
-                    state.selected_pack = Some(combined_idx);
+                    state.pack_manager.selected = Some(combined_idx);
                     state.editing_presets = state.custom_packs[idx].presets.clone();
                     state.editing_selected = 0;
                 }
@@ -219,14 +225,14 @@ fn render_custom_packs(
 fn render_renaming_row(ui: &mut egui::Ui, state: &mut PresetsTabState, actions: &mut PackActions) {
     ui.horizontal(|ui| {
         ui.label("👤");
-        ui.add(egui::TextEdit::singleline(&mut state.rename_pack_text).desired_width(150.0));
-        let can_save = !state.rename_pack_text.trim().is_empty();
+        ui.add(egui::TextEdit::singleline(&mut state.pack_manager.rename_text).desired_width(150.0));
+        let can_save = !state.pack_manager.rename_text.trim().is_empty();
         if ui.add_enabled(can_save, egui::Button::new("✅").small()).on_hover_text("Confirm rename").clicked() {
             actions.rename_confirm = true;
         }
         if ui.small_button("✖").on_hover_text("Cancel rename").clicked() {
-            state.renaming_pack = None;
-            state.rename_pack_text.clear();
+            state.pack_manager.renaming = None;
+            state.pack_manager.rename_text.clear();
         }
     });
 }
@@ -235,17 +241,17 @@ fn process_pack_actions(state: &mut PresetsTabState, actions: PackActions) {
     let builtin_count = builtin_packs().len();
 
     if let Some(idx) = actions.rename_start {
-        state.renaming_pack = Some(idx);
-        state.rename_pack_text = state.custom_packs[idx].name.clone();
+        state.pack_manager.renaming = Some(idx);
+        state.pack_manager.rename_text = state.custom_packs[idx].name.clone();
     }
     if actions.rename_confirm {
-        if let Some(idx) = state.renaming_pack {
+        if let Some(idx) = state.pack_manager.renaming {
             if let Some(pack) = state.custom_packs.get_mut(idx) {
-                pack.name = state.rename_pack_text.trim().to_string();
+                pack.name = state.pack_manager.rename_text.trim().to_string();
             }
         }
-        state.renaming_pack = None;
-        state.rename_pack_text.clear();
+        state.pack_manager.renaming = None;
+        state.pack_manager.rename_text.clear();
         state.save_packs();
     }
     if let Some(idx) = actions.update_idx {
@@ -260,10 +266,10 @@ fn process_pack_actions(state: &mut PresetsTabState, actions: PackActions) {
     }
     if let Some(idx) = actions.delete_idx {
         state.custom_packs.remove(idx);
-        if let Some(sel) = state.selected_pack {
+        if let Some(sel) = state.pack_manager.selected {
             let deleted = builtin_count + idx;
-            if sel == deleted { state.selected_pack = None; }
-            else if sel > deleted { state.selected_pack = Some(sel - 1); }
+            if sel == deleted { state.pack_manager.selected = None; }
+            else if sel > deleted { state.pack_manager.selected = Some(sel - 1); }
         }
         state.save_packs();
     }
@@ -281,7 +287,7 @@ fn process_merge(state: &mut PresetsTabState, combined_idx: usize, builtin_count
             name: format!("{} (merged)", builtin.name),
             presets: merged.clone(),
         });
-        state.selected_pack = Some(builtin_count + state.custom_packs.len() - 1);
+        state.pack_manager.selected = Some(builtin_count + state.custom_packs.len() - 1);
         merged
     } else {
         let custom_idx = combined_idx - builtin_count;
@@ -318,13 +324,13 @@ fn export_pack_at(state: &mut PresetsTabState, combined_idx: usize) {
 fn render_pack_bottom_actions(ui: &mut egui::Ui, state: &mut PresetsTabState) {
     let builtin_count = builtin_packs().len();
 
-    if !state.show_save_pack {
+    if !state.pack_manager.show_save_form {
         ui.horizontal(|ui| {
             if ui.small_button("💾 Save current as new pack…").clicked() {
-                state.show_save_pack = true;
-                state.new_pack_name.clear();
+                state.pack_manager.show_save_form = true;
+                state.pack_manager.new_name.clear();
             }
-            if let Some(sel) = state.selected_pack {
+            if let Some(sel) = state.pack_manager.selected {
                 if sel >= builtin_count {
                     let custom_idx = sel - builtin_count;
                     let pack_name = state.custom_packs.get(custom_idx)
@@ -358,32 +364,32 @@ fn render_pack_bottom_actions(ui: &mut egui::Ui, state: &mut PresetsTabState) {
 fn render_save_pack_form(ui: &mut egui::Ui, state: &mut PresetsTabState, builtin_count: usize) {
     ui.horizontal(|ui| {
         ui.label("Pack name:");
-        ui.add(egui::TextEdit::singleline(&mut state.new_pack_name).desired_width(150.0));
-        let can_save = !state.new_pack_name.trim().is_empty();
+        ui.add(egui::TextEdit::singleline(&mut state.pack_manager.new_name).desired_width(150.0));
+        let can_save = !state.pack_manager.new_name.trim().is_empty();
         if ui.add_enabled(can_save, egui::Button::new("💾 Save")).clicked() {
             let new_idx = builtin_count + state.custom_packs.len();
             state.custom_packs.push(SavedPresetPack {
-                name: state.new_pack_name.trim().to_string(),
+                name: state.pack_manager.new_name.trim().to_string(),
                 presets: state.editing_presets.clone(),
             });
-            state.selected_pack = Some(new_idx);
-            state.new_pack_name.clear();
-            state.show_save_pack = false;
+            state.pack_manager.selected = Some(new_idx);
+            state.pack_manager.new_name.clear();
+            state.pack_manager.show_save_form = false;
             state.save_packs();
         }
         if ui.button("Cancel").clicked() {
-            state.new_pack_name.clear();
-            state.show_save_pack = false;
+            state.pack_manager.new_name.clear();
+            state.pack_manager.show_save_form = false;
         }
     });
 }
 
 fn render_import_preview(ui: &mut egui::Ui, state: &mut PresetsTabState) {
-    if !state.show_import_confirm { return; }
+    if !state.pack_manager.show_import_confirm { return; }
 
-    let preview_name = state.import_preview.as_ref().map(|p| p.name.clone());
-    let preview_count = state.import_preview.as_ref().map(|p| p.presets.len());
-    let preview_items: Vec<String> = state.import_preview.as_ref()
+    let preview_name = state.pack_manager.import_preview.as_ref().map(|p| p.name.clone());
+    let preview_count = state.pack_manager.import_preview.as_ref().map(|p| p.presets.len());
+    let preview_items: Vec<String> = state.pack_manager.import_preview.as_ref()
         .map(|p| p.presets.iter().map(|pr| format!("  • {} ({})", pr.name, pr.host)).collect())
         .unwrap_or_default();
 
@@ -405,21 +411,21 @@ fn render_import_preview(ui: &mut egui::Ui, state: &mut PresetsTabState) {
             });
         ui.horizontal(|ui| {
             if ui.button("✅ Import").clicked() {
-                let pack = state.import_preview.take().unwrap();
+                let pack = state.pack_manager.import_preview.take().unwrap();
                 state.custom_packs.push(pack);
-                state.show_import_confirm = false;
+                state.pack_manager.show_import_confirm = false;
                 state.save_packs();
             }
             if ui.button("✖ Cancel").clicked() {
-                state.import_preview = None;
-                state.show_import_confirm = false;
+                state.pack_manager.import_preview = None;
+                state.pack_manager.show_import_confirm = false;
             }
         });
     });
 }
 
 fn export_selected_pack(state: &mut PresetsTabState) {
-    if let Some(sel) = state.selected_pack {
+    if let Some(sel) = state.pack_manager.selected {
         export_pack_at(state, sel);
     } else {
         // No pack selected — export current editing presets
@@ -449,8 +455,8 @@ fn import_pack(state: &mut PresetsTabState) {
     {
         match preset_packs::import_pack_json(&path) {
             Ok(pack) => {
-                state.import_preview = Some(pack);
-                state.show_import_confirm = true;
+                state.pack_manager.import_preview = Some(pack);
+                state.pack_manager.show_import_confirm = true;
             }
             Err(e) => {
                 state.status = Some((format!("❌ Import failed: {}", e), std::time::Instant::now()));

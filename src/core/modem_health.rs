@@ -27,14 +27,14 @@ pub fn start_modem_health_checker(state: SharedState) -> (std::thread::JoinHandl
 fn health_check_loop(state: SharedState, shutdown: ShutdownSignal) {
     while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
         {
-            lock_state(&state).thread_heartbeat_modem = Some(std::time::Instant::now());
+            lock_state(&state).heartbeats.modem = Some(std::time::Instant::now());
         }
         let (enabled, url, interval_secs) = {
             let shared = lock_state(&state);
             (
-                shared.modem_health_enabled,
-                shared.modem_health_url.clone(),
-                shared.modem_health_interval_secs,
+                shared.modem.enabled,
+                shared.modem.url.clone(),
+                shared.modem.interval_secs,
             )
         };
 
@@ -47,7 +47,7 @@ fn health_check_loop(state: SharedState, shutdown: ShutdownSignal) {
 
         {
             let mut shared = lock_state(&state);
-            shared.modem_http_status = result;
+            shared.modem.http_status = result;
         }
 
         std::thread::sleep(Duration::from_secs(interval_secs as u64));

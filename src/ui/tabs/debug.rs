@@ -190,11 +190,11 @@ fn snapshot_state_info(state: &PingState) -> Vec<(&'static str, String)> {
         ("Gateway enabled", state.gateway.enabled.to_string()),
         ("Gateway IP", state.gateway.ip.as_deref().unwrap_or("-").to_string()),
         ("Config target", state.config.target.clone()),
-        ("Modem HTTP", format!("{:?}", state.modem_http_status)),
-        ("Modem struggle (10m)", state.modem_struggle_count(10).to_string()),
-        ("Thread: Pinger", heartbeat_status(state.thread_heartbeat_pinger, state.running)),
-        ("Thread: Gateway", heartbeat_status(state.thread_heartbeat_gateway, state.gateway.enabled && state.running)),
-        ("Thread: Modem HTTP", heartbeat_status(state.thread_heartbeat_modem, state.modem_health_enabled)),
+        ("Modem HTTP", format!("{:?}", state.modem.http_status)),
+        ("Modem struggle (10m)", state.modem.struggle_count(10).to_string()),
+        ("Thread: Pinger", heartbeat_status(state.heartbeats.pinger, state.running)),
+        ("Thread: Gateway", heartbeat_status(state.heartbeats.gateway, state.gateway.enabled && state.running)),
+        ("Thread: Modem HTTP", heartbeat_status(state.heartbeats.modem, state.modem.enabled)),
     ]
 }
 

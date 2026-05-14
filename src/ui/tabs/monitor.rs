@@ -130,8 +130,8 @@ fn render_gateway_stats(ui: &mut egui::Ui, state: &PingState, window_secs: f64) 
         stat_card(ui, "Diagnosis", diag, color);
 
         // Modem HTTP status card
-        if !matches!(state.modem_http_status, ModemHttpStatus::Disabled) {
-            let (label, color) = match &state.modem_http_status {
+        if !matches!(state.modem.http_status, ModemHttpStatus::Disabled) {
+            let (label, color) = match &state.modem.http_status {
                 ModemHttpStatus::Ok => ("OK", egui::Color32::from_rgb(100, 255, 100)),
                 ModemHttpStatus::Failed(_) => ("FAIL", egui::Color32::from_rgb(255, 80, 80)),
                 ModemHttpStatus::Unknown => ("...", egui::Color32::GRAY),
@@ -149,15 +149,49 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
     let elapsed = state.elapsed_secs();
     let window_secs = TIME_WINDOWS[monitor.selected_window].0;
 
+    let chart_data = prepare_chart_data(state, min_time, window_secs);
+    render_chart_plot(ui, state, elapsed, window_secs, chart_data);
+}
+
+/// All pre-computed data needed to render the chart
+struct ChartData<'a> {
+    ext_line: Line<'a>,
+    timeout_markers: egui_plot::Points<'a>,
+    elevated_pts: Vec<[f64; 2]>,
+    high_pts: Vec<[f64; 2]>,
+    critical_pts: Vec<[f64; 2]>,
+    gw_line: Line<'a>,
+    show_gateway: bool,
+    visible_results: Vec<(f64, Option<f64>, bool)>,
+    y_ceiling: f64,
+}
+
+fn prepare_chart_data<'a>(state: &'a PingState, min_time: f64, window_secs: f64) -> ChartData<'a> {
+    let (ext_line, timeout_markers, elevated_pts, high_pts, critical_pts) =
+        build_external_chart_data(state, min_time);
     let gw_line = build_gateway_chart_data(state, window_secs);
     let visible_results = build_tooltip_data(state, min_time);
     let show_gateway = state.gateway.enabled && state.gateway.ip.is_some();
 
+    let max_data_latency = state.results.iter()
+        .filter(|r| r.elapsed_secs >= min_time)
+        .filter_map(|r| r.latency_ms)
+        .fold(0.0_f64, f64::max);
+    let y_ceiling = (max_data_latency * 2.0).max(50.0);
+
+    ChartData {
+        ext_line, timeout_markers, elevated_pts, high_pts, critical_pts,
+        gw_line, show_gateway, visible_results, y_ceiling,
+    }
+}
+
+fn render_chart_plot(ui: &mut egui::Ui, state: &PingState, elapsed: f64, window_secs: f64, data: ChartData<'_>) {
     let x_fmt = |mark: egui_plot::GridMark, _range: &std::ops::RangeInclusive<f64>| {
         let total_secs = mark.value as u64;
         format!("{}:{:02}", total_secs / 60, total_secs % 60)
     };
 
+    let visible_results = data.visible_results;
     let mut plot = Plot::new("latency_plot")
         .height(200.0)
         .allow_drag(false)
@@ -171,7 +205,6 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
         .label_formatter(move |_name, value| format_nearest_tooltip(&visible_results, value.x))
         .legend(egui_plot::Legend::default());
 
-    // Lock the X-axis to always show the full window width
     if window_secs > 0.0 {
         let max_time = elapsed.max(window_secs);
         plot = plot.include_x(max_time - window_secs).include_x(max_time);
@@ -180,20 +213,9 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
     }
 
     let thresholds = &state.thresholds;
-    let (ext_line, timeout_markers, elevated_pts, high_pts, critical_pts) =
-        build_external_chart_data(state, min_time);
-
-    // Compute the max visible latency to auto-scale threshold lines.
-    // Only show threshold lines that are within 2x of the max data point,
-    // so a 500ms Critical line doesn't stretch the chart when pings are 20ms.
-    let max_data_latency = state.results.iter()
-        .filter(|r| r.elapsed_secs >= min_time)
-        .filter_map(|r| r.latency_ms)
-        .fold(0.0_f64, f64::max);
-    let y_ceiling = (max_data_latency * 2.0).max(50.0);
+    let y_ceiling = data.y_ceiling;
 
     plot.show(ui, |plot_ui| {
-        // Threshold lines - only show when data approaches them
         for &tier in &[PingTier::Elevated, PingTier::High, PingTier::Critical] {
             let thresh = tier.threshold(thresholds);
             if thresh > 0.0 && thresh <= y_ceiling {
@@ -205,13 +227,12 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
             }
         }
 
-        plot_ui.line(ext_line);
-        plot_ui.points(timeout_markers);
-        // Tier dots - no legend name to avoid duplicating the threshold line entry
+        plot_ui.line(data.ext_line);
+        plot_ui.points(data.timeout_markers);
         for (tier, pts) in [
-            (PingTier::Elevated, elevated_pts),
-            (PingTier::High, high_pts),
-            (PingTier::Critical, critical_pts),
+            (PingTier::Elevated, data.elevated_pts),
+            (PingTier::High, data.high_pts),
+            (PingTier::Critical, data.critical_pts),
         ] {
             if !pts.is_empty() {
                 let [r, g, b] = tier.rgb();
@@ -220,7 +241,7 @@ fn render_latency_chart(ui: &mut egui::Ui, state: &PingState, monitor: &mut Moni
                     .radius(3.5));
             }
         }
-        if show_gateway { plot_ui.line(gw_line); }
+        if data.show_gateway { plot_ui.line(data.gw_line); }
     });
 }
 
@@ -399,8 +420,8 @@ fn network_diagnosis(state: &PingState) -> (&'static str, egui::Color32) {
     let ext_sent = state.total_sent;
     let gw_loss = state.gateway.recent_loss_pct();
     let ext_loss = state.recent_loss_pct();
-    let modem_http_failed = matches!(&state.modem_http_status, ModemHttpStatus::Failed(_));
-    let modem_struggling = state.modem_struggle_count(state.modem_struggle_window_mins as u64) >= 3;
+    let modem_http_failed = matches!(&state.modem.http_status, ModemHttpStatus::Failed(_));
+    let modem_struggling = state.modem.struggle_count(state.modem.struggle_window_mins) >= 3;
 
     if gw_sent == 0 || ext_sent == 0 {
         ("Collecting...", egui::Color32::GRAY)

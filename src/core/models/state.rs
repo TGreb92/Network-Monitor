@@ -36,6 +36,64 @@ impl IntervalTracker {
     }
 }
 
+/// Modem HTTP health check status
+#[derive(Clone, Debug, PartialEq)]
+pub enum ModemHttpStatus {
+    Disabled,
+    Unknown,
+    Ok,
+    Failed(String),
+}
+
+/// Modem health-check and struggle-detection state
+#[derive(Clone)]
+pub struct ModemState {
+    pub enabled: bool,
+    pub url: String,
+    pub interval_secs: u32,
+    pub struggle_window_mins: u32,
+    pub http_status: ModemHttpStatus,
+    pub struggle_events: VecDeque<Instant>,
+}
+
+impl ModemState {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            url: String::new(),
+            interval_secs: 15,
+            struggle_window_mins: 5,
+            http_status: ModemHttpStatus::Disabled,
+            struggle_events: VecDeque::with_capacity(32),
+        }
+    }
+
+    /// Count modem struggle events in the last N minutes
+    pub fn struggle_count(&self, minutes: u32) -> usize {
+        let cutoff = Instant::now() - std::time::Duration::from_secs(minutes as u64 * 60);
+        self.struggle_events.iter().filter(|&&t| t > cutoff).count()
+    }
+
+    /// Reset runtime data (keeps config)
+    pub fn reset_runtime(&mut self) {
+        self.struggle_events.clear();
+    }
+}
+
+/// Thread alive timestamps - set by each background thread on every iteration
+#[derive(Clone)]
+pub struct ThreadHeartbeats {
+    pub pinger: Option<Instant>,
+    pub gateway: Option<Instant>,
+    pub modem: Option<Instant>,
+}
+
+impl ThreadHeartbeats {
+    pub fn new() -> Self {
+        Self { pinger: None, gateway: None, modem: None }
+    }
+}
+
 /// Central shared state accessed by both the pinger thread (writer) and the GUI (reader).
 #[derive(Clone)]
 pub struct PingState {
@@ -62,32 +120,10 @@ pub struct PingState {
     pub notify_loss_pending: bool,
     /// Whether loss event notifications are enabled
     pub notify_loss_enabled: bool,
-    /// Timestamps of external loss batches that started while gateway was healthy.
-    /// Used to detect modem CPU struggling (frequent short loss cycles).
-    pub modem_struggle_events: VecDeque<Instant>,
-    /// HTTP health check result for modem
-    pub modem_http_status: ModemHttpStatus,
-    /// Whether modem HTTP health check is enabled
-    pub modem_health_enabled: bool,
-    /// URL to check for modem health
-    pub modem_health_url: String,
-    /// Seconds between health checks
-    pub modem_health_interval_secs: u32,
-    /// Window in minutes for modem struggle pattern detection
-    pub modem_struggle_window_mins: u32,
-    /// Thread alive timestamps - set by each background thread on every iteration
-    pub thread_heartbeat_pinger: Option<Instant>,
-    pub thread_heartbeat_gateway: Option<Instant>,
-    pub thread_heartbeat_modem: Option<Instant>,
-}
-
-/// Modem HTTP health check status
-#[derive(Clone, Debug, PartialEq)]
-pub enum ModemHttpStatus {
-    Disabled,
-    Unknown,
-    Ok,
-    Failed(String),
+    /// Modem health-check and struggle-detection state
+    pub modem: ModemState,
+    /// Thread alive timestamps
+    pub heartbeats: ThreadHeartbeats,
 }
 
 impl PingState {
@@ -113,15 +149,8 @@ impl PingState {
             auto_export_pending: false,
             notify_loss_pending: false,
             notify_loss_enabled: false,
-            modem_struggle_events: VecDeque::with_capacity(32),
-            modem_http_status: ModemHttpStatus::Disabled,
-            modem_health_enabled: false,
-            modem_health_url: String::new(),
-            modem_health_interval_secs: 15,
-            modem_struggle_window_mins: 5,
-            thread_heartbeat_pinger: None,
-            thread_heartbeat_gateway: None,
-            thread_heartbeat_modem: None,
+            modem: ModemState::new(),
+            heartbeats: ThreadHeartbeats::new(),
         }
     }
 
@@ -138,9 +167,9 @@ impl PingState {
             && self.gateway.total_sent >= 10
             && self.gateway.recent_loss_pct() < 1.0
         {
-            self.modem_struggle_events.push_back(Instant::now());
-            if self.modem_struggle_events.len() > 32 {
-                self.modem_struggle_events.pop_front();
+            self.modem.struggle_events.push_back(Instant::now());
+            if self.modem.struggle_events.len() > 32 {
+                self.modem.struggle_events.pop_front();
             }
         }
 
@@ -181,18 +210,12 @@ impl PingState {
         (failed as f64 / window.len() as f64) * 100.0
     }
 
-    /// Count modem struggle events (external loss while gateway healthy) in the last N minutes
-    pub fn modem_struggle_count(&self, minutes: u64) -> usize {
-        let cutoff = Instant::now() - std::time::Duration::from_secs(minutes * 60);
-        self.modem_struggle_events.iter().filter(|&&t| t > cutoff).count()
-    }
-
     /// Generate a text diagnosis for reports (mirrors monitor tab logic)
     pub fn diagnosis_text(&self) -> &'static str {
         let gw_loss = self.gateway.recent_loss_pct();
         let ext_loss = self.recent_loss_pct();
-        let modem_http_failed = matches!(&self.modem_http_status, ModemHttpStatus::Failed(_));
-        let modem_struggling = self.modem_struggle_count(self.modem_struggle_window_mins as u64) >= 3;
+        let modem_http_failed = matches!(&self.modem.http_status, ModemHttpStatus::Failed(_));
+        let modem_struggling = self.modem.struggle_count(self.modem.struggle_window_mins) >= 3;
 
         if self.gateway.total_sent == 0 || self.total_sent == 0 {
             "Insufficient data"
@@ -269,7 +292,7 @@ impl PingState {
         self.interval.reset();
         self.auto_export_pending = false;
         self.notify_loss_pending = false;
-        self.modem_struggle_events.clear();
+        self.modem.reset_runtime();
     }
 
     /// Stop the test, flushing any partial interval report.

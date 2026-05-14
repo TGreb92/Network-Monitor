@@ -71,7 +71,7 @@ pub fn detect_gateway() -> Option<String> {
 fn pinger_loop(state: SharedState, shutdown: ShutdownSignal) {
     while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
         {
-            lock_state(&state).thread_heartbeat_pinger = Some(Instant::now());
+            lock_state(&state).heartbeats.pinger = Some(Instant::now());
         }
         // Quick check: only read running flag (no String clone)
         let running = {
@@ -260,7 +260,7 @@ fn sleep_until_next_ping(ping_start: Instant, ping_interval_ms: u64) {
 fn gateway_pinger_loop(state: SharedState, shutdown: ShutdownSignal) {
     while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
         {
-            lock_state(&state).thread_heartbeat_gateway = Some(Instant::now());
+            lock_state(&state).heartbeats.gateway = Some(Instant::now());
         }
         let (gateway_ip, timeout_ms, ping_interval_ms, running, enabled) = {
             let shared = lock_state(&state);

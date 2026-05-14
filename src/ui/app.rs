@@ -58,12 +58,12 @@ impl NetworkMonitorApp {
             let mut shared = lock_state(&state);
             shared.config = PingConfig::from_saved(&saved);
             shared.gateway.enabled = saved.gateway_enabled;
-            shared.modem_health_enabled = saved.modem_health_enabled;
-            shared.modem_health_url = saved.modem_health_url.clone();
-            shared.modem_health_interval_secs = saved.modem_health_interval_secs;
-            shared.modem_struggle_window_mins = saved.modem_struggle_window_mins;
+            shared.modem.enabled = saved.modem_health_enabled;
+            shared.modem.url = saved.modem_health_url.clone();
+            shared.modem.interval_secs = saved.modem_health_interval_secs;
+            shared.modem.struggle_window_mins = saved.modem_struggle_window_mins;
             if saved.modem_health_enabled {
-                shared.modem_http_status = crate::core::state::ModemHttpStatus::Unknown;
+                shared.modem.http_status = crate::core::state::ModemHttpStatus::Unknown;
             }
         }
 
@@ -73,6 +73,8 @@ impl NetworkMonitorApp {
 
         let packs_config = preset_packs::load();
         let presets_tab = PresetsTabState::from_packs_config(&packs_config);
+
+        sidebar.cached_packs = presets_tab.all_packs();
 
         Self {
             state,
@@ -207,7 +209,10 @@ impl eframe::App for NetworkMonitorApp {
                     monitor::render(ui, &shared, &mut self.monitor);
                 }
                 Tab::Console => console::render(ui, &self.state, &mut self.console),
-                Tab::Presets => presets::render(ui, &mut self.presets_tab, &mut self.sidebar),
+                Tab::Presets => {
+                    presets::render(ui, &mut self.presets_tab, &mut self.sidebar);
+                    self.sidebar.cached_packs = self.presets_tab.all_packs();
+                }
                 Tab::Servers => {
                     let all_packs = self.presets_tab.all_packs();
                     servers::render(ui, &all_packs, &mut self.servers, &self.sidebar);

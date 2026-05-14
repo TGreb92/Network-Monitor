@@ -88,29 +88,36 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
     sidebar.exports.auto_export_json = cfg.auto_export_json;
     sidebar.exports.auto_export_isp = cfg.auto_export_isp;
     sidebar.exports.auto_export_log = cfg.auto_export_log;
-    sidebar.notifications.notify_on_loss = cfg.notify_on_loss;
-    sidebar.notifications.notify_on_gw_loss = cfg.notify_on_gw_loss;
-    sidebar.notifications.notify_on_elevated_ping = cfg.notify_on_elevated_ping;
-    sidebar.notifications.notify_on_high_ping = cfg.notify_on_high_ping;
-    sidebar.notifications.notify_on_critical_ping = cfg.notify_on_critical_ping;
-    sidebar.notifications.threshold_elevated_ms = cfg.threshold_elevated;
-    sidebar.notifications.threshold_high_ms = cfg.threshold_high;
-    sidebar.notifications.threshold_critical_ms = cfg.threshold_critical;
+    sidebar.notifications.prefs.notify_on_loss = cfg.notify_on_loss;
+    sidebar.notifications.prefs.notify_on_gw_loss = cfg.notify_on_gw_loss;
+    sidebar.notifications.prefs.notify_on_elevated_ping = cfg.notify_on_elevated_ping;
+    sidebar.notifications.prefs.notify_on_high_ping = cfg.notify_on_high_ping;
+    sidebar.notifications.prefs.notify_on_critical_ping = cfg.notify_on_critical_ping;
+    sidebar.notifications.prefs.threshold_elevated_ms = cfg.threshold_elevated;
+    sidebar.notifications.prefs.threshold_high_ms = cfg.threshold_high;
+    sidebar.notifications.prefs.threshold_critical_ms = cfg.threshold_critical;
 
     // Sync modem health config to shared state
     {
         let mut shared = lock_state(state);
-        shared.modem_health_enabled = cfg.modem_health_enabled;
-        shared.modem_health_url = cfg.modem_health_url.clone();
-        shared.modem_health_interval_secs = cfg.modem_health_interval;
-        shared.modem_struggle_window_mins = cfg.modem_struggle_window;
+        shared.modem.enabled = cfg.modem_health_enabled;
+        shared.modem.url = cfg.modem_health_url.clone();
+        shared.modem.interval_secs = cfg.modem_health_interval;
+        shared.modem.struggle_window_mins = cfg.modem_struggle_window;
         if !cfg.modem_health_enabled {
-            shared.modem_http_status = crate::core::state::ModemHttpStatus::Disabled;
+            shared.modem.http_status = crate::core::state::ModemHttpStatus::Disabled;
         }
     }
 }
 
 fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
+    render_ping_settings(ui, cfg);
+    render_export_settings(ui, cfg);
+    render_notification_settings(ui, cfg);
+    render_modem_settings(ui, cfg);
+}
+
+fn render_ping_settings(ui: &mut egui::Ui, cfg: &mut ConfigState) {
     ui.heading("🔧 Ping Settings");
     ui.add_space(4.0);
 
@@ -133,7 +140,9 @@ fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
     ui.label("Test duration (minutes, 0 = unlimited):");
     ui.add(egui::DragValue::new(&mut cfg.duration_mins).range(0..=1440).speed(1).suffix(" min"));
     ui.add_space(8.0);
+}
 
+fn render_export_settings(ui: &mut egui::Ui, cfg: &mut ConfigState) {
     ui.heading("📁 Export");
     ui.add_space(4.0);
     ui.label("Export folder (empty = exe_dir/exports/):");
@@ -167,8 +176,10 @@ fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
         ui.checkbox(&mut cfg.auto_export_isp, "ISP Report");
         ui.checkbox(&mut cfg.auto_export_log, "Console Log");
     });
-
     ui.add_space(8.0);
+}
+
+fn render_notification_settings(ui: &mut egui::Ui, cfg: &mut ConfigState) {
     ui.heading("🔔 Notifications");
     ui.add_space(4.0);
     ui.checkbox(&mut cfg.notify_on_loss, "Toast on loss event");
@@ -203,8 +214,10 @@ fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
     if cfg.threshold_critical < cfg.threshold_high {
         cfg.threshold_critical = cfg.threshold_high;
     }
-
     ui.add_space(8.0);
+}
+
+fn render_modem_settings(ui: &mut egui::Ui, cfg: &mut ConfigState) {
     ui.heading("🔌 Modem Health Check");
     ui.add_space(4.0);
     ui.checkbox(&mut cfg.modem_health_enabled, "Enable HTTP health check");
@@ -298,12 +311,12 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut Side
     }
 
     // Push notification config into the live notification state
-    sidebar.notifications.notify_on_loss = cfg.notify_on_loss;
-    sidebar.notifications.notify_on_gw_loss = cfg.notify_on_gw_loss;
-    sidebar.notifications.notify_on_elevated_ping = cfg.notify_on_elevated_ping;
-    sidebar.notifications.notify_on_high_ping = cfg.notify_on_high_ping;
-    sidebar.notifications.notify_on_critical_ping = cfg.notify_on_critical_ping;
-    sidebar.notifications.threshold_elevated_ms = cfg.threshold_elevated;
-    sidebar.notifications.threshold_high_ms = cfg.threshold_high;
-    sidebar.notifications.threshold_critical_ms = cfg.threshold_critical;
+    sidebar.notifications.prefs.notify_on_loss = cfg.notify_on_loss;
+    sidebar.notifications.prefs.notify_on_gw_loss = cfg.notify_on_gw_loss;
+    sidebar.notifications.prefs.notify_on_elevated_ping = cfg.notify_on_elevated_ping;
+    sidebar.notifications.prefs.notify_on_high_ping = cfg.notify_on_high_ping;
+    sidebar.notifications.prefs.notify_on_critical_ping = cfg.notify_on_critical_ping;
+    sidebar.notifications.prefs.threshold_elevated_ms = cfg.threshold_elevated;
+    sidebar.notifications.prefs.threshold_high_ms = cfg.threshold_high;
+    sidebar.notifications.prefs.threshold_critical_ms = cfg.threshold_critical;
 }
