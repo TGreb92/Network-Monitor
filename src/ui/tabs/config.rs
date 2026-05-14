@@ -35,6 +35,7 @@ pub struct ConfigState {
     pub modem_health_enabled: bool,
     pub modem_health_url: String,
     pub modem_health_interval: u32,
+    pub modem_struggle_window: u32,
     pub status: Option<(String, Instant)>,
     pub preset_editor: PresetEditorState,
 }
@@ -64,6 +65,7 @@ impl ConfigState {
             modem_health_enabled: saved.modem_health_enabled,
             modem_health_url: saved.modem_health_url.clone(),
             modem_health_interval: saved.modem_health_interval_secs,
+            modem_struggle_window: saved.modem_struggle_window_mins,
             status: None,
             preset_editor: PresetEditorState::new(),
         }
@@ -109,6 +111,7 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
         shared.modem_health_enabled = cfg.modem_health_enabled;
         shared.modem_health_url = cfg.modem_health_url.clone();
         shared.modem_health_interval_secs = cfg.modem_health_interval;
+        shared.modem_struggle_window_mins = cfg.modem_struggle_window;
         if !cfg.modem_health_enabled {
             shared.modem_http_status = crate::core::state::ModemHttpStatus::Disabled;
         }
@@ -221,6 +224,13 @@ fn render_fields(ui: &mut egui::Ui, cfg: &mut ConfigState) {
             .range(5..=120)
             .suffix(" s").speed(1));
     });
+    ui.horizontal(|ui| {
+        ui.label("Struggle detection window:");
+        ui.add(egui::DragValue::new(&mut cfg.modem_struggle_window)
+            .range(2..=30)
+            .suffix(" min").speed(1));
+    });
+    ui.label(egui::RichText::new("Triggers when 3+ loss events occur within this window while gateway is healthy.").weak().small());
 }
 
 fn render_buttons(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
@@ -285,6 +295,7 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut Side
         modem_health_enabled: cfg.modem_health_enabled,
         modem_health_url: cfg.modem_health_url.clone(),
         modem_health_interval_secs: cfg.modem_health_interval,
+        modem_struggle_window_mins: cfg.modem_struggle_window,
     };
     match config::save(&saved) {
         Ok(()) => cfg.status = Some(("✅ Config saved".into(), Instant::now())),

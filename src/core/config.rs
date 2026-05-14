@@ -70,6 +70,9 @@ pub struct SavedConfig {
     /// Seconds between modem health checks
     #[serde(default = "default_modem_health_interval")]
     pub modem_health_interval_secs: u32,
+    /// Window in minutes for modem struggle pattern detection
+    #[serde(default = "default_modem_struggle_window")]
+    pub modem_struggle_window_mins: u32,
 }
 
 fn default_elevated_threshold() -> u32 { 100 }
@@ -77,6 +80,7 @@ fn default_high_threshold() -> u32 { 200 }
 fn default_critical_threshold() -> u32 { 500 }
 fn default_modem_health_url() -> String { "http://192.168.0.1/?status_status".into() }
 fn default_modem_health_interval() -> u32 { 15 }
+fn default_modem_struggle_window() -> u32 { 5 }
 
 impl Default for SavedConfig {
     fn default() -> Self {
@@ -105,6 +109,7 @@ impl Default for SavedConfig {
             modem_health_enabled: false,
             modem_health_url: default_modem_health_url(),
             modem_health_interval_secs: 15,
+            modem_struggle_window_mins: 5,
         }
     }
 }

@@ -54,6 +54,7 @@ impl NetworkMonitorApp {
             shared.modem_health_enabled = saved.modem_health_enabled;
             shared.modem_health_url = saved.modem_health_url.clone();
             shared.modem_health_interval_secs = saved.modem_health_interval_secs;
+            shared.modem_struggle_window_mins = saved.modem_struggle_window_mins;
             if saved.modem_health_enabled {
                 shared.modem_http_status = crate::core::state::ModemHttpStatus::Unknown;
             }

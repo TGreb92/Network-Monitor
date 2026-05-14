@@ -73,6 +73,8 @@ pub struct PingState {
     pub modem_health_url: String,
     /// Seconds between health checks
     pub modem_health_interval_secs: u32,
+    /// Window in minutes for modem struggle pattern detection
+    pub modem_struggle_window_mins: u32,
     /// Thread alive timestamps - set by each background thread on every iteration
     pub thread_heartbeat_pinger: Option<Instant>,
     pub thread_heartbeat_gateway: Option<Instant>,
@@ -116,6 +118,7 @@ impl PingState {
             modem_health_enabled: false,
             modem_health_url: String::new(),
             modem_health_interval_secs: 15,
+            modem_struggle_window_mins: 5,
             thread_heartbeat_pinger: None,
             thread_heartbeat_gateway: None,
             thread_heartbeat_modem: None,

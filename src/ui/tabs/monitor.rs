@@ -400,7 +400,7 @@ fn network_diagnosis(state: &PingState) -> (&'static str, egui::Color32) {
     let gw_loss = state.gateway.recent_loss_pct();
     let ext_loss = state.recent_loss_pct();
     let modem_http_failed = matches!(&state.modem_http_status, ModemHttpStatus::Failed(_));
-    let modem_struggling = state.modem_struggle_count(10) >= 3;
+    let modem_struggling = state.modem_struggle_count(state.modem_struggle_window_mins as u64) >= 3;
 
     if gw_sent == 0 || ext_sent == 0 {
         ("Collecting...", egui::Color32::GRAY)
