@@ -7,7 +7,7 @@ use serde::Serialize;
 use std::io::Write;
 
 use crate::core::json_types::*;
-use crate::core::state::PingState;
+use crate::core::state::{PingState, ModemHttpStatus};
 
 /// Get the export directory. If `custom_path` is non-empty, use it.
 /// Otherwise default to an `exports/` subfolder next to the executable.
@@ -133,6 +133,47 @@ pub fn write_isp_report(path: &std::path::Path, state: &PingState) -> std::io::R
             writeln!(file, "  connections are healthy.")?;
         }
         writeln!(file)?;
+    }
+
+    // Modem health section
+    {
+        let modem_http_failed = matches!(&state.modem_http_status, ModemHttpStatus::Failed(_));
+        let window = state.modem_struggle_window_mins;
+        let struggle_count = state.modem_struggle_count(window as u64);
+        let has_modem_data = state.modem_health_enabled || !state.modem_struggle_events.is_empty();
+
+        if has_modem_data {
+            writeln!(file, "--- MODEM HEALTH ANALYSIS ---")?;
+            writeln!(file)?;
+
+            if state.modem_health_enabled {
+                let status_str = match &state.modem_http_status {
+                    ModemHttpStatus::Disabled => "Disabled",
+                    ModemHttpStatus::Unknown => "Unknown",
+                    ModemHttpStatus::Ok => "Reachable",
+                    ModemHttpStatus::Failed(_) => "Unreachable",
+                };
+                writeln!(file, "  HTTP health check:   {}", status_str)?;
+                writeln!(file, "  Modem URL:           {}", state.modem_health_url)?;
+            }
+
+            writeln!(file, "  Struggle events:     {} in last {} min (total: {})",
+                struggle_count, window, state.modem_struggle_events.len())?;
+            writeln!(file, "  (Loss batches starting while gateway was healthy)")?;
+            writeln!(file)?;
+
+            writeln!(file, "  DIAGNOSIS: {}", state.diagnosis_text())?;
+
+            if modem_http_failed || struggle_count >= 3 {
+                writeln!(file)?;
+                writeln!(file, "  NOTE: The pattern of external packet loss while the gateway")?;
+                writeln!(file, "  (router) shows no symptoms is consistent with modem hardware")?;
+                writeln!(file, "  issues, particularly a failing CPU or overheating firmware.")?;
+                writeln!(file, "  This can manifest as brief disconnects every 2-10 minutes.")?;
+                writeln!(file, "  Consider requesting a modem replacement from your ISP.")?;
+            }
+            writeln!(file)?;
+        }
     }
 
     if !state.interval_reports.is_empty() {
@@ -325,6 +366,27 @@ pub fn write_json(path: &std::path::Path, state: &PingState) -> std::io::Result<
             latencies: state.gateway.all_latencies.iter().map(|lat| round1(*lat)).collect(),
         });
 
+    let modem_health = if state.modem_health_enabled || !state.modem_struggle_events.is_empty() {
+        let window = state.modem_struggle_window_mins;
+        let http_status = match &state.modem_http_status {
+            crate::core::state::ModemHttpStatus::Disabled => "Disabled".to_string(),
+            crate::core::state::ModemHttpStatus::Unknown => "Unknown".to_string(),
+            crate::core::state::ModemHttpStatus::Ok => "OK".to_string(),
+            crate::core::state::ModemHttpStatus::Failed(e) => format!("Failed: {}", e),
+        };
+        Some(crate::core::json_types::JsonModemHealth {
+            http_check_enabled: state.modem_health_enabled,
+            http_check_url: state.modem_health_url.clone(),
+            http_status,
+            struggle_events_total: state.modem_struggle_events.len(),
+            struggle_window_mins: window,
+            struggle_events_in_window: state.modem_struggle_count(window as u64),
+            diagnosis: state.diagnosis_text().to_string(),
+        })
+    } else {
+        None
+    };
+
     let export = JsonExport {
         test_info: JsonTestInfo {
             generated: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -345,6 +407,7 @@ pub fn write_json(path: &std::path::Path, state: &PingState) -> std::io::Result<
             avg_jitter_ms: round1(state.jitter.avg()),
         },
         gateway,
+        modem_health,
         results: state.results.iter().map(|result| JsonResult {
             seq: result.seq,
             success: result.success,

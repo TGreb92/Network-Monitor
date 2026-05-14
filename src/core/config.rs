@@ -8,11 +8,37 @@ use std::path::PathBuf;
 
 const CONFIG_FILENAME: &str = "network-monitor.toml";
 
+/// Whether a preset uses ICMP ping or TCP connect
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum TestMode {
+    Icmp,
+    Tcp,
+}
+
+impl Default for TestMode {
+    fn default() -> Self { Self::Icmp }
+}
+
+impl std::fmt::Display for TestMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Icmp => write!(f, "ICMP"),
+            Self::Tcp => write!(f, "TCP"),
+        }
+    }
+}
+
+fn default_tcp_port() -> u16 { 443 }
+
 /// A named target preset (e.g. "Google DNS" → "8.8.8.8")
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TargetPreset {
     pub name: String,
     pub host: String,
+    #[serde(default)]
+    pub mode: TestMode,
+    #[serde(default = "default_tcp_port")]
+    pub port: u16,
 }
 
 /// Serializable config that gets saved to disk
@@ -117,10 +143,10 @@ impl Default for SavedConfig {
 /// Built-in default presets
 pub fn default_presets() -> Vec<TargetPreset> {
     vec![
-        TargetPreset { name: "Google DNS".into(), host: "8.8.8.8".into() },
-        TargetPreset { name: "Cloudflare DNS".into(), host: "1.1.1.1".into() },
-        TargetPreset { name: "Quad9 DNS".into(), host: "9.9.9.9".into() },
-        TargetPreset { name: "OpenDNS".into(), host: "208.67.222.222".into() },
+        TargetPreset { name: "Google DNS".into(), host: "8.8.8.8".into(), mode: TestMode::Icmp, port: 443 },
+        TargetPreset { name: "Cloudflare DNS".into(), host: "1.1.1.1".into(), mode: TestMode::Icmp, port: 443 },
+        TargetPreset { name: "Quad9 DNS".into(), host: "9.9.9.9".into(), mode: TestMode::Icmp, port: 443 },
+        TargetPreset { name: "OpenDNS".into(), host: "208.67.222.222".into(), mode: TestMode::Icmp, port: 443 },
     ]
 }
 

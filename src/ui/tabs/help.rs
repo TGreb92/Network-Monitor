@@ -115,12 +115,12 @@ fn render_chart_section(ui: &mut egui::Ui) {
 }
 
 fn render_diagnosis_section(ui: &mut egui::Ui) {
-    ui.heading("🏥 Gateway Diagnosis - How It Works");
+    ui.heading("🏥 Network Diagnosis - How It Works");
     ui.add_space(4.0);
 
     ui.label("When gateway monitoring is enabled, the app pings both your router \
-              AND the external target simultaneously. By comparing the two, it can \
-              pinpoint where problems originate:");
+              AND the external target simultaneously. Combined with modem health checks, \
+              it uses a 6-level priority system to pinpoint where problems originate:");
     ui.add_space(8.0);
 
     help_item(ui, "✅ All Clear",
@@ -133,7 +133,25 @@ fn render_diagnosis_section(ui: &mut egui::Ui) {
          Causes: Wi-Fi interference, bad Ethernet cable, router overload.\n\
          Fix: Move closer to router, switch to wired, restart router.");
 
-    help_item(ui, "ISP / Route Issue",
+    help_item(ui, "🔥 Modem CPU Struggling",
+        "Modem HTTP health check failed AND external loss is above 2%.\n\
+         The modem's web interface is unresponsive while packets are being lost.\n\
+         Causes: Modem overheating, CPU overloaded, firmware bug.\n\
+         Fix: Restart modem, check ventilation, consider replacement.");
+
+    help_item(ui, "⚠ Modem May Be Struggling",
+        "3+ loss events detected within the configured struggle window while gateway is healthy.\n\
+         Intermittent pattern suggests modem instability even if the web UI is still reachable.\n\
+         Causes: Modem CPU spikes under load, overheating, aging hardware.\n\
+         Fix: Monitor over longer period, restart modem, check for firmware updates.");
+
+    help_item(ui, "🔌 Modem Web UI Unreachable",
+        "Modem HTTP health check failed but no external packet loss detected.\n\
+         The modem's management page is down but routing still works.\n\
+         Causes: Web server crashed, modem rebooting, wrong URL configured.\n\
+         Fix: Verify modem URL in Config, try accessing it in a browser.");
+
+    help_item(ui, "🌐 ISP / Route Issue",
         "Gateway loss is fine (< 2%) but external loss is above 2%.\n\
          Your local network is healthy - the problem is between your router and the target.\n\
          Causes: ISP congestion, routing problems, target server issues.\n\
@@ -150,8 +168,9 @@ fn render_config_section(ui: &mut egui::Ui) {
 
     help_item(ui, "Target Presets",
         "Add, edit, and delete named target presets.\n\
-         Each preset has a name (e.g. \"Game Server EU\") and a host (IP or hostname).\n\
-         Select a preset in the sidebar dropdown to use it.\n\
+         Each preset has a name, host (IP or hostname), and test mode (ICMP or TCP).\n\
+         ICMP mode uses standard ping. TCP mode uses a TCP handshake to a port (default 443).\n\
+         Use TCP mode for targets that block ICMP (e.g. game servers, some CDNs).\n\
          Presets are saved to network-monitor.toml.");
 
     help_item(ui, "Timeout (ms)",
@@ -178,6 +197,12 @@ fn render_config_section(ui: &mut egui::Ui) {
         "Optional fixed-duration test. Set to 0 for unlimited (run until stopped).\n\
          When set, the sidebar shows a progress bar with remaining time.\n\
          The test auto-stops and flushes a final interval report when time is up.");
+
+    help_item(ui, "Modem Health Check",
+        "When enabled, periodically sends an HTTP GET to your modem's web interface.\n\
+         Detects modem CPU overload by correlating unresponsive web UI with packet loss.\n\
+         Configure the URL (default: http://192.168.0.1/?status_status), check interval, \
+         and the struggle detection window (how many minutes to look back for repeated loss events).");
 }
 
 fn render_tips_section(ui: &mut egui::Ui) {
@@ -186,6 +211,8 @@ fn render_tips_section(ui: &mut egui::Ui) {
 
     ui.label("• Run for at least 5 minutes to get meaningful data");
     ui.label("• Enable gateway monitoring to diagnose local vs ISP issues");
+    ui.label("• Use TCP mode for targets that block ICMP (game servers, some CDNs)");
+    ui.label("• Enable modem health check to detect modem CPU struggles");
     ui.label("• Use the Console tab to spot individual timeout events");
     ui.label("• Export to CSV/JSON to save results for later analysis");
     ui.label("• Try different targets (Cloudflare 1.1.1.1, Quad9 9.9.9.9) to isolate route-specific problems");

@@ -9,6 +9,8 @@ pub struct JsonExport {
     pub test_info: JsonTestInfo,
     pub summary: JsonSummary,
     pub gateway: Option<JsonGateway>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modem_health: Option<JsonModemHealth>,
     pub results: Vec<JsonResult>,
     pub interval_reports: Vec<JsonIntervalReport>,
     pub console_log: Vec<String>,
@@ -68,4 +70,15 @@ pub struct JsonIntervalReport {
     pub avg_ms: f64,
     pub min_ms: f64,
     pub max_ms: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct JsonModemHealth {
+    pub http_check_enabled: bool,
+    pub http_check_url: String,
+    pub http_status: String,
+    pub struggle_events_total: usize,
+    pub struggle_window_mins: u32,
+    pub struggle_events_in_window: usize,
+    pub diagnosis: String,
 }

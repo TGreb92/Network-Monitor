@@ -13,15 +13,21 @@ Or build from source (see [Building](#building) below).
 ### 📊 Monitoring
 - **Real-time ping monitoring** with configurable target, timeout, and frequency
 - **Live statistics** — packet loss %, avg/min/max latency, jitter, connection verdict
-- **Latency chart** — time-based graph with snap-to-nearest tooltips and loss period markers
-- **Interval reports** — periodic summaries with loss event counts
+- **Latency chart** — time-based graph with selectable time window (1m/5m/15m/30m/All), tiered ping thresholds, and loss period markers
+- **Interval reports** — periodic summaries with loss event counts, filtered by selected time window
 - **Loss batch tracking** — counts distinct connectivity drops, not just individual timeouts
+- **Tiered ping detection** — Elevated/High/Critical thresholds with batch tracking
 - **Configurable test duration** — set a time limit or run indefinitely
+- **Time-windowed stats** — all stat cards follow the selected chart time window
 
-### 🌐 Gateway Monitoring
+### 🌐 Gateway & Modem Monitoring
 - **Auto-detect gateway** — finds your router IP via `ipconfig`
 - **Parallel gateway pings** — monitors both your router and external target simultaneously
 - **ISP vs local diagnosis** — determines if packet loss is on your LAN or your ISP's network
+- **Modem HTTP health check** — periodic HTTP GET to your modem's status page to detect CPU/firmware issues
+- **Modem struggle detection** — tracks external loss batches while gateway is healthy; detects dying modem CPU
+- **Configurable detection window** — adjust the struggle detection window (2–30 minutes) to match your issue pattern
+- **6-level diagnosis** — Local network → Modem CPU struggling → Modem may be struggling → Modem web UI unreachable → ISP/route issue → All clear
 
 ### 📋 Presets & Configuration
 - **Named target presets** — save frequently used targets (Google DNS, Cloudflare, etc.)
@@ -29,10 +35,15 @@ Or build from source (see [Building](#building) below).
 - **Add/edit/delete presets** in the Config tab
 - **TOML persistence** — all settings saved to `network-monitor.toml` next to the executable
 
+### 🔔 Notifications
+- **Toast notifications** on loss events, gateway loss, and tiered high pings
+- **Severity-based cooldown** — higher severity breaks through cooldown timer
+- **Mute toggle** — quickly silence all notifications from the sidebar or tray
+
 ### 📥 Export & Import
-- **CSV export** — ping results and interval reports via the `csv` crate
-- **JSON export** — full session data via `serde_json`, importable back into the app
-- **ISP Report** — human-readable text report for support tickets, with gateway diagnosis and loss timeline
+- **CSV export** — ping results and interval reports
+- **JSON export** — full session data including gateway and modem health analysis
+- **ISP Report** — human-readable text report with gateway diagnosis, modem health analysis, loss timeline, and interval breakdown
 - **Console Log** — raw ping log dump
 - **JSON import** — load a previous export to review stats, chart, and logs in the UI
 - **Auto-export on stop** — configure which formats to export automatically when a test ends
@@ -42,38 +53,56 @@ Or build from source (see [Building](#building) below).
 - Live scrolling log: `[HH:MM:SS] #42 Reply from 8.8.8.8: time=15ms`
 - Auto-scroll toggle with LIVE/STOPPED indicator
 
+### 🗔 System Tray
+- **Minimize to tray** — hides from taskbar, keeps monitoring in background
+- **Tray menu** — Show/Stop/Start/Mute/Minimize/Exit
+- **Double-click to restore** window from tray
+
 ## Architecture
 
 ```
 src/
-├── main.rs               — Entry point, #![windows_subsystem = "windows"]
+├── main.rs                  — Entry point, COM init, #![windows_subsystem = "windows"]
 ├── core/
-│   ├── config.rs         — TOML config persistence, presets
-│   ├── export.rs         — CSV, JSON, ISP report, console log, JSON import
-│   ├── pinger.rs         — Background ping threads, gateway detection
-│   └── state.rs          — Shared state (PingState, JitterTracker, GatewayStats, etc.)
+│   ├── config.rs            — TOML config persistence, presets
+│   ├── export.rs            — CSV, JSON, ISP report, console log writers
+│   ├── import.rs            — JSON import to reconstruct session
+│   ├── modem_health.rs      — HTTP health check background thread
+│   ├── pinger.rs            — Background ping thread, gateway detection
+│   └── models/
+│       ├── state.rs         — Shared state (PingState), shutdown signals, diagnosis
+│       ├── types.rs         — PingResult, PingConfig, IntervalReport
+│       ├── trackers.rs      — LossBatchTracker, JitterTracker, GatewayStats
+│       ├── tiers.rs         — PingTier enum, TieredPingTracker, thresholds
+│       └── json_types.rs    — Serde types for JSON export/import
 └── ui/
-    ├── app.rs            — Main App struct, tab routing, deferred initialization
+    ├── app.rs               — Main App struct, tab routing, thread lifecycle
     ├── components/
-    │   ├── helpers.rs    — Formatting utilities (stat cards, color helpers)
-    │   ├── presets.rs    — Preset CRUD UI (add/edit/delete)
-    │   └── sidebar.rs   — Controls panel, stats, export/import buttons
+    │   ├── helpers.rs        — Formatting utilities (stat cards, color helpers)
+    │   ├── notifications.rs  — Toast notification logic, cooldown, severity
+    │   ├── presets.rs        — Preset CRUD UI
+    │   ├── export_import.rs  — Export buttons, auto-export, JSON import
+    │   ├── sidebar.rs        — Controls panel, target selector, stats
+    │   └── tray.rs           — System tray icon, menu, hide/show via Win32
     └── tabs/
-        ├── config.rs     — Config tab: ping settings, export options, preset editor
-        ├── console.rs    — Console tab: live ping log viewer
-        ├── help.rs       — Help tab: metric explanations and usage guide
-        └── monitor.rs    — Monitor tab: latency chart, interval reports table
+        ├── config.rs         — Config tab: ping, gateway, modem health, notifications
+        ├── console.rs        — Console tab: live ping log viewer
+        ├── debug.rs          — Debug tab (debug builds only): test toasts, thread status
+        ├── help.rs           — Help tab: metric explanations and usage guide
+        ├── monitor.rs        — Monitor tab: windowed stats, chart, reports, diagnosis
 ```
 
 ### Design Decisions
 
-- **Arc\<Mutex\>** — simple shared state between 2 threads (pinger + GUI), minimal contention
+- **Arc\<Mutex\>** — simple shared state between threads (pinger + gateway + modem + GUI)
 - **Bounded collections** — all `VecDeque` collections capped (7200 results, 2000 log entries) to prevent unbounded memory growth
-- **SidebarSnapshot** — reads all sidebar data in one mutex lock, releases lock, then renders
-- **ConfigSnapshot** — pinger reads config once per loop, never holds the lock during subprocess execution
-- **Deferred initialization** — background threads spawn on the first rendered frame, not during window creation
+- **ShutdownSignal** — per-thread `Arc<AtomicBool>` for clean shutdown on window close
+- **Thread heartbeats** — each background thread writes `Instant::now()` for liveness monitoring (debug tab)
+- **SidebarSnapshot / ConfigSnapshot** — reads all needed data in one mutex lock, releases lock, then renders
+- **Deferred initialization** — background threads spawn after several rendered frames, not during window creation
 - **CREATE_NO_WINDOW** — `0x08000000` flag on all Windows subprocess spawns to prevent console popups
 - **Poisoned lock recovery** — `.unwrap_or_else(|e| e.into_inner())` on all mutex locks
+- **COM initialization** — `CoInitializeEx(COINIT_APARTMENTTHREADED)` on main thread before eframe for notify-rust/rfd compatibility
 
 ## Installation
 
@@ -99,6 +128,8 @@ The release profile is optimized for size:
 - `strip = true` — strip debug symbols
 - `codegen-units = 1` — single codegen unit
 
+Debug builds include a console window and a Debug tab with test toast buttons, thread heartbeat monitoring, and event simulation.
+
 ## Usage
 
 1. Launch `network-monitor.exe`
@@ -108,14 +139,23 @@ The release profile is optimized for size:
 
 | Tab | Purpose |
 |-----|---------|
-| **📊 Monitor** | Latency chart, interval reports table, connection verdict |
+| **📊 Monitor** | Latency chart, windowed stats, interval reports, network diagnosis |
 | **🖥 Console** | Live scrolling ping log |
-| **⚙ Config** | Ping settings, presets, export options, gateway config |
+| **⚙ Config** | Ping settings, presets, gateway, modem health, notifications, export |
 | **❓ Help** | Explanation of all metrics and UI elements |
+| **🔧 Debug** | Thread status, test toasts, event simulation *(debug builds only)* |
+
+### Modem Health Detection
+
+Enable **Modem HTTP Health Check** in the Config tab to periodically test your modem's web interface. The app detects modem CPU issues by correlating:
+- External packet loss while your gateway (router) shows no symptoms
+- Modem web UI becoming unreachable
+
+Adjust the **struggle detection window** (default 5 min) to match your disconnection pattern (typically 2–10 minutes for a dying modem).
 
 ### Exporting
 
-Use the sidebar export buttons (CSV, JSON, ISP Report, Console Log) or enable **auto-export on stop** in the Config tab to automatically save results when a test ends.
+Use the sidebar export buttons (CSV, JSON, ISP Report, Console Log) or enable **auto-export on stop** in the Config tab. The ISP report and JSON export include full modem health analysis and diagnosis.
 
 ### Importing
 
@@ -133,63 +173,10 @@ Click **📥 Load JSON…** in the sidebar to import a previous JSON export and 
 | serde_json | 1 | JSON export/import |
 | toml | 0.8 | Config file persistence |
 | rfd | 0.15 | Native file/folder picker dialogs |
-
-## Roadmap
-
-### ✅ Completed
-
-- [x] Real-time ping monitoring with live stats
-- [x] Latency chart with time-based X-axis, loss period markers, snap-to-nearest tooltips
-- [x] Interval reports with loss event counts
-- [x] Loss batch tracking (distinct connectivity drops)
-- [x] Jitter calculation and display
-- [x] Gateway auto-detection and parallel monitoring
-- [x] ISP vs local network diagnosis
-- [x] Named target presets with CRUD editor
-- [x] Built-in presets (Google DNS, Cloudflare, Quad9, OpenDNS)
-- [x] Quick-switch dropdown in sidebar
-- [x] Configurable ping frequency, timeout, report interval
-- [x] Configurable test duration with progress bar
-- [x] Export: CSV, JSON, ISP report, console log
-- [x] JSON import to review past sessions in the UI
-- [x] Auto-export on stop (per-format toggles)
-- [x] Configurable export folder with native folder picker
-- [x] TOML config persistence
-- [x] Console log with auto-scroll toggle
-- [x] Help tab with full metric explanations
-
-### 🔜 Planned
-
-#### Chart & Visualization
-- [ ] Chart time range selector (zoom to last 1m/5m/15m/30m/all)
-- [ ] Latency distribution histogram
-- [ ] Min/Max/Avg overlay reference lines on chart
-
-#### Network & Diagnostics
-- [ ] Multiple simultaneous targets (side-by-side comparison)
-- [ ] Traceroute integration (hop-by-hop analysis)
-- [ ] DNS resolution monitoring (track lookup time separately)
-- [ ] Network interface selector (multi-NIC setups)
-- [ ] Packet size configuration (test with different payload sizes)
-
-#### Notifications & Alerts
-- [ ] Sound/desktop notifications on connection loss
-- [ ] Configurable alert thresholds (latency/loss triggers)
-
-#### Session Management
-- [ ] Historical session comparison (compare past runs)
-- [ ] Session auto-save (local history for later review)
-
-#### UX & Window Management
-- [ ] System tray icon with minimize-to-tray
-- [ ] Dark/light theme toggle
-- [ ] Window always-on-top toggle
-- [ ] Compact/mini mode (small floating window with loss % and latency)
-- [ ] Startup auto-run (auto-start pinging on launch)
-- [ ] Connection uptime tracker (total uptime % since app started)
-
-#### Platform
-- [ ] Cross-platform support (Linux/macOS ping commands)
+| notify-rust | 4 | Windows toast notifications |
+| tray-icon | 0.19 | System tray icon and menu |
+| windows-sys | 0.59 | Win32 API (COM init, ShowWindow) |
+| image | 0.25 | Tray icon image loading |
 
 ## License
 

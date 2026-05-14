@@ -102,7 +102,13 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
 
     let current_name = sidebar.presets
         .get(sidebar.selected_preset)
-        .map(|preset| format!("{} ({})", preset.name, preset.host))
+        .map(|preset| {
+            let mode = match preset.mode {
+                crate::core::config::TestMode::Icmp => "ICMP".to_string(),
+                crate::core::config::TestMode::Tcp => format!("TCP:{}", preset.port),
+            };
+            format!("{} ({}) [{}]", preset.name, preset.host, mode)
+        })
         .unwrap_or_else(|| "Select target".into());
 
     let old_selection = sidebar.selected_preset;
@@ -120,9 +126,16 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
         });
 
     if sidebar.selected_preset != old_selection {
+        let preset = sidebar.presets.get(sidebar.selected_preset);
         let new_host = sidebar.selected_host();
         let mut shared = lock_state(&state);
         shared.config.target = new_host;
+        shared.config.use_tcp = preset
+            .map(|p| p.mode == crate::core::config::TestMode::Tcp)
+            .unwrap_or(false);
+        shared.config.tcp_port = preset
+            .map(|p| p.port)
+            .unwrap_or(443);
     }
 }
 
@@ -153,8 +166,15 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut Sideb
             egui::RichText::new("▶ Start").size(16.0).strong()
         ).min_size(button_size);
         if ui.add(btn).clicked() {
+            let preset = sidebar.presets.get(sidebar.selected_preset);
             let mut shared = lock_state(&state);
             shared.config.target = sidebar.selected_host();
+            shared.config.use_tcp = preset
+                .map(|p| p.mode == crate::core::config::TestMode::Tcp)
+                .unwrap_or(false);
+            shared.config.tcp_port = preset
+                .map(|p| p.port)
+                .unwrap_or(443);
             shared.start();
         }
         ui.colored_label(egui::Color32::from_rgb(255, 100, 100), "● STOPPED");

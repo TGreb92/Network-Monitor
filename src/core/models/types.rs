@@ -25,21 +25,33 @@ pub struct PingConfig {
     pub ping_interval_ms: u64,
     /// Test duration in seconds. 0 = unlimited.
     pub duration_secs: u64,
+    /// Use TCP connect instead of ICMP ping
+    pub use_tcp: bool,
+    /// Port for TCP connect mode
+    pub tcp_port: u16,
 }
 
 impl PingConfig {
     /// Create a PingConfig from a saved config loaded from disk
     pub fn from_saved(saved: &crate::core::config::SavedConfig) -> Self {
-        let target = saved.presets
-            .get(saved.selected_preset)
-            .map(|preset| preset.host.clone())
+        let preset = saved.presets.get(saved.selected_preset);
+        let target = preset
+            .map(|p| p.host.clone())
             .unwrap_or_else(|| "8.8.8.8".to_string());
+        let use_tcp = preset
+            .map(|p| p.mode == crate::core::config::TestMode::Tcp)
+            .unwrap_or(false);
+        let tcp_port = preset
+            .map(|p| p.port)
+            .unwrap_or(443);
         Self {
             target,
             timeout_ms: saved.timeout_ms,
             interval_secs: saved.interval_secs,
             ping_interval_ms: saved.ping_interval_ms,
             duration_secs: saved.duration_mins * 60,
+            use_tcp,
+            tcp_port,
         }
     }
 }

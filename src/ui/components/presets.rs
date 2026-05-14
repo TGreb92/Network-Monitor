@@ -4,13 +4,15 @@
 
 use eframe::egui;
 
-use crate::core::config::TargetPreset;
+use crate::core::config::{TargetPreset, TestMode};
 use crate::ui::components::sidebar::SidebarState;
 
 /// Preset editor state (lives in ConfigState)
 pub struct PresetEditorState {
     pub edit_name: String,
     pub edit_host: String,
+    pub edit_mode: TestMode,
+    pub edit_port: u16,
     pub editing_index: Option<usize>,
     pub show_add_form: bool,
 }
@@ -20,6 +22,8 @@ impl PresetEditorState {
         Self {
             edit_name: String::new(),
             edit_host: String::new(),
+            edit_mode: TestMode::Icmp,
+            edit_port: 443,
             editing_index: None,
             show_add_form: false,
         }
@@ -59,6 +63,11 @@ fn render_list(ui: &mut egui::Ui, editor: &mut PresetEditorState, sidebar: &mut 
                             sidebar.selected_preset = idx;
                         }
                         ui.label(&preset.host);
+                        let mode_label = match preset.mode {
+                            TestMode::Icmp => "ICMP",
+                            TestMode::Tcp => &format!("TCP:{}", preset.port),
+                        };
+                        ui.label(egui::RichText::new(mode_label).small().weak());
                         if ui.small_button("✏").on_hover_text("Edit").clicked() {
                             start_edit_index = Some(idx);
                         }
@@ -82,6 +91,8 @@ fn render_list(ui: &mut egui::Ui, editor: &mut PresetEditorState, sidebar: &mut 
     if let Some(idx) = start_edit_index {
         editor.edit_name = sidebar.presets[idx].name.clone();
         editor.edit_host = sidebar.presets[idx].host.clone();
+        editor.edit_mode = sidebar.presets[idx].mode.clone();
+        editor.edit_port = sidebar.presets[idx].port;
         editor.editing_index = Some(idx);
     }
 }
@@ -105,6 +116,21 @@ fn render_form(ui: &mut egui::Ui, editor: &mut PresetEditorState, sidebar: &mut 
         ui.add(egui::TextEdit::singleline(&mut editor.edit_host).desired_width(120.0));
     });
 
+    ui.horizontal(|ui| {
+        ui.label("Mode:");
+        egui::ComboBox::from_id_salt("preset_mode")
+            .width(60.0)
+            .selected_text(editor.edit_mode.to_string())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut editor.edit_mode, TestMode::Icmp, "ICMP");
+                ui.selectable_value(&mut editor.edit_mode, TestMode::Tcp, "TCP");
+            });
+        if editor.edit_mode == TestMode::Tcp {
+            ui.label("Port:");
+            ui.add(egui::DragValue::new(&mut editor.edit_port).range(1..=65535).speed(1));
+        }
+    });
+
     let can_save = !editor.edit_name.trim().is_empty() && !editor.edit_host.trim().is_empty();
 
     ui.horizontal(|ui| {
@@ -114,6 +140,8 @@ fn render_form(ui: &mut egui::Ui, editor: &mut PresetEditorState, sidebar: &mut 
                     sidebar.presets[idx] = TargetPreset {
                         name: editor.edit_name.trim().to_string(),
                         host: editor.edit_host.trim().to_string(),
+                        mode: editor.edit_mode.clone(),
+                        port: editor.edit_port,
                     };
                 }
                 clear_form(editor);
@@ -122,6 +150,8 @@ fn render_form(ui: &mut egui::Ui, editor: &mut PresetEditorState, sidebar: &mut 
             sidebar.presets.push(TargetPreset {
                 name: editor.edit_name.trim().to_string(),
                 host: editor.edit_host.trim().to_string(),
+                mode: editor.edit_mode.clone(),
+                port: editor.edit_port,
             });
             clear_form(editor);
         }
@@ -134,6 +164,8 @@ fn render_form(ui: &mut egui::Ui, editor: &mut PresetEditorState, sidebar: &mut 
 fn clear_form(editor: &mut PresetEditorState) {
     editor.edit_name.clear();
     editor.edit_host.clear();
+    editor.edit_mode = TestMode::Icmp;
+    editor.edit_port = 443;
     editor.editing_index = None;
     editor.show_add_form = false;
 }

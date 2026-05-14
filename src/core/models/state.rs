@@ -187,6 +187,30 @@ impl PingState {
         self.modem_struggle_events.iter().filter(|&&t| t > cutoff).count()
     }
 
+    /// Generate a text diagnosis for reports (mirrors monitor tab logic)
+    pub fn diagnosis_text(&self) -> &'static str {
+        let gw_loss = self.gateway.recent_loss_pct();
+        let ext_loss = self.recent_loss_pct();
+        let modem_http_failed = matches!(&self.modem_http_status, ModemHttpStatus::Failed(_));
+        let modem_struggling = self.modem_struggle_count(self.modem_struggle_window_mins as u64) >= 3;
+
+        if self.gateway.total_sent == 0 || self.total_sent == 0 {
+            "Insufficient data"
+        } else if gw_loss > 2.0 {
+            "Local network issue — packet loss between device and router"
+        } else if modem_http_failed && ext_loss > 2.0 {
+            "Modem CPU struggling — HTTP check failed with external packet loss"
+        } else if modem_struggling {
+            "Modem may be struggling — repeated external loss while gateway is healthy"
+        } else if modem_http_failed {
+            "Modem web UI unreachable — HTTP check failed but traffic is flowing"
+        } else if ext_loss > 2.0 {
+            "ISP or routing issue — local network stable but external target has loss"
+        } else {
+            "No issues detected"
+        }
+    }
+
     pub fn avg_latency(&self) -> f64 {
         if self.all_latencies.is_empty() { return 0.0; }
         self.all_latencies.iter().sum::<f64>() / self.all_latencies.len() as f64

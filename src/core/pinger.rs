@@ -10,6 +10,7 @@
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
+use std::net::TcpStream;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -91,9 +92,15 @@ fn pinger_loop(state: SharedState, shutdown: ShutdownSignal) {
         }
 
         let ping_start = Instant::now();
-        let (success, latency_ms, output_line) = execute_ping(
-            &config_snapshot.target, config_snapshot.timeout_ms
-        );
+        let (success, latency_ms, output_line) = if config_snapshot.use_tcp {
+            execute_tcp_connect(
+                &config_snapshot.target, config_snapshot.tcp_port, config_snapshot.timeout_ms
+            )
+        } else {
+            execute_ping(
+                &config_snapshot.target, config_snapshot.timeout_ms
+            )
+        };
 
         record_ping_result(
             &state, success, latency_ms, &output_line,
@@ -111,6 +118,8 @@ struct ConfigSnapshot {
     interval_secs: u64,
     ping_interval_ms: u64,
     duration_secs: u64,
+    use_tcp: bool,
+    tcp_port: u16,
 }
 
 fn read_config_snapshot(state: &SharedState) -> ConfigSnapshot {
@@ -121,6 +130,8 @@ fn read_config_snapshot(state: &SharedState) -> ConfigSnapshot {
         interval_secs: shared.config.interval_secs,
         ping_interval_ms: shared.config.ping_interval_ms,
         duration_secs: shared.config.duration_secs,
+        use_tcp: shared.config.use_tcp,
+        tcp_port: shared.config.tcp_port,
     }
 }
 
@@ -309,6 +320,33 @@ pub fn execute_ping(target: &str, timeout_ms: u32) -> (bool, Option<f64>, String
             (success, latency, summary)
         }
         Err(e) => (false, None, format!("Failed to execute ping: {}", e)),
+    }
+}
+
+/// Execute a TCP connect test to measure reachability and latency.
+///
+/// Opens a TCP connection to `target:port` with the given timeout. Measures
+/// the handshake time as latency. Useful for targets that block ICMP.
+pub fn execute_tcp_connect(target: &str, port: u16, timeout_ms: u32) -> (bool, Option<f64>, String) {
+    use std::net::ToSocketAddrs;
+
+    let addr_str = format!("{}:{}", target, port);
+    let start = Instant::now();
+
+    let socket_addr = match addr_str.to_socket_addrs() {
+        Ok(mut addrs) => match addrs.next() {
+            Some(addr) => addr,
+            None => return (false, None, "DNS returned no addresses".into()),
+        },
+        Err(e) => return (false, None, format!("DNS resolution failed: {}", e)),
+    };
+
+    match TcpStream::connect_timeout(&socket_addr, Duration::from_millis(timeout_ms as u64)) {
+        Ok(_stream) => {
+            let latency = start.elapsed().as_secs_f64() * 1000.0;
+            (true, Some(latency), format!("TCP {}:{} time={:.0}ms", target, port, latency))
+        }
+        Err(e) => (false, None, format!("TCP connect failed: {}", e)),
     }
 }
 

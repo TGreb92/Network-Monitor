@@ -258,6 +258,13 @@ fn render_status(ui: &mut egui::Ui, cfg: &ConfigState) {
 
 fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
     let target = sidebar.selected_host();
+    let preset = sidebar.presets.get(sidebar.selected_preset);
+    let use_tcp = preset
+        .map(|p| p.mode == crate::core::config::TestMode::Tcp)
+        .unwrap_or(false);
+    let tcp_port = preset
+        .map(|p| p.port)
+        .unwrap_or(443);
     let mut shared = lock_state(&state);
     shared.config = PingConfig {
         target,
@@ -265,6 +272,8 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut Side
         interval_secs: cfg.interval,
         ping_interval_ms: cfg.ping_freq.max(100),
         duration_secs: cfg.duration_mins * 60,
+        use_tcp,
+        tcp_port,
     };
     shared.gateway.enabled = cfg.gateway_enabled;
     shared.config_changed = true;
