@@ -16,6 +16,8 @@ use super::notifications::NotificationState;
 pub struct SidebarState {
     pub presets: Vec<TargetPreset>,
     pub selected_preset: usize,
+    /// Currently loaded pack name (None = custom/default)
+    pub selected_pack_name: Option<String>,
     pub exports: ExportState,
     pub notifications: NotificationState,
 }
@@ -25,6 +27,7 @@ impl SidebarState {
         Self {
             presets,
             selected_preset,
+            selected_pack_name: None,
             exports: ExportState::new(export_path),
             notifications: NotificationState::new(),
         }
@@ -95,6 +98,40 @@ pub fn render(ctx: &egui::Context, state: &SharedState, sidebar: &mut SidebarSta
 fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut SidebarState) {
     ui.heading("🎯 Target");
 
+    // Pack dropdown
+    let pack_label = sidebar.selected_pack_name.clone().unwrap_or_else(|| "Custom".into());
+    let packs_config = crate::core::preset_packs::load();
+    let full_packs = crate::core::preset_packs::all_packs(&packs_config.custom_packs);
+
+    let old_pack = sidebar.selected_pack_name.clone();
+    egui::ComboBox::from_id_salt("sidebar_pack_selector")
+        .selected_text(format!("📦 {}", pack_label))
+        .width(ui.available_width() - 8.0)
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(sidebar.selected_pack_name.is_none(), "Custom").clicked() {
+                sidebar.selected_pack_name = None;
+            }
+            for pack in &full_packs {
+                let selected = sidebar.selected_pack_name.as_deref() == Some(&pack.name);
+                if ui.selectable_label(selected, &pack.name).clicked() {
+                    sidebar.selected_pack_name = Some(pack.name.clone());
+                    sidebar.presets = pack.presets.clone();
+                    sidebar.selected_preset = 0;
+                }
+            }
+        });
+
+    if sidebar.selected_pack_name != old_pack {
+        if let Some(preset) = sidebar.presets.get(sidebar.selected_preset) {
+            let mut shared = lock_state(&state);
+            shared.config.target = preset.host.clone();
+            shared.config.test_mode = preset.mode.clone();
+        }
+    }
+
+    ui.add_space(4.0);
+
+    // Preset dropdown
     if sidebar.presets.is_empty() {
         ui.label("No presets configured");
         return;
@@ -103,11 +140,7 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
     let current_name = sidebar.presets
         .get(sidebar.selected_preset)
         .map(|preset| {
-            let mode = match preset.mode {
-                crate::core::config::TestMode::Icmp => "ICMP".to_string(),
-                crate::core::config::TestMode::Tcp => format!("TCP:{}", preset.port),
-            };
-            format!("{} ({}) [{}]", preset.name, preset.host, mode)
+            format!("{} ({}) [{}]", preset.name, preset.host, preset.mode.label())
         })
         .unwrap_or_else(|| "Select target".into());
 
@@ -130,12 +163,9 @@ fn render_target_selector(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut 
         let new_host = sidebar.selected_host();
         let mut shared = lock_state(&state);
         shared.config.target = new_host;
-        shared.config.use_tcp = preset
-            .map(|p| p.mode == crate::core::config::TestMode::Tcp)
-            .unwrap_or(false);
-        shared.config.tcp_port = preset
-            .map(|p| p.port)
-            .unwrap_or(443);
+        shared.config.test_mode = preset
+            .map(|p| p.mode.clone())
+            .unwrap_or_default();
     }
 }
 
@@ -169,12 +199,9 @@ fn render_start_stop(ui: &mut egui::Ui, state: &SharedState, sidebar: &mut Sideb
             let preset = sidebar.presets.get(sidebar.selected_preset);
             let mut shared = lock_state(&state);
             shared.config.target = sidebar.selected_host();
-            shared.config.use_tcp = preset
-                .map(|p| p.mode == crate::core::config::TestMode::Tcp)
-                .unwrap_or(false);
-            shared.config.tcp_port = preset
-                .map(|p| p.port)
-                .unwrap_or(443);
+            shared.config.test_mode = preset
+                .map(|p| p.mode.clone())
+                .unwrap_or_default();
             shared.start();
         }
         ui.colored_label(egui::Color32::from_rgb(255, 100, 100), "● STOPPED");

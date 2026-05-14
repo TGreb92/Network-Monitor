@@ -12,6 +12,8 @@ pub const MAX_LATENCIES: usize = 7200;
 /// Maximum number of jitter data points to retain
 pub const MAX_JITTER: usize = 7200;
 
+use crate::core::server_check::TestMode;
+
 /// User-configurable ping parameters
 #[derive(Clone, Debug)]
 pub struct PingConfig {
@@ -25,10 +27,8 @@ pub struct PingConfig {
     pub ping_interval_ms: u64,
     /// Test duration in seconds. 0 = unlimited.
     pub duration_secs: u64,
-    /// Use TCP connect instead of ICMP ping
-    pub use_tcp: bool,
-    /// Port for TCP connect mode
-    pub tcp_port: u16,
+    /// Test mode for the selected preset
+    pub test_mode: TestMode,
 }
 
 impl PingConfig {
@@ -38,20 +38,16 @@ impl PingConfig {
         let target = preset
             .map(|p| p.host.clone())
             .unwrap_or_else(|| "8.8.8.8".to_string());
-        let use_tcp = preset
-            .map(|p| p.mode == crate::core::config::TestMode::Tcp)
-            .unwrap_or(false);
-        let tcp_port = preset
-            .map(|p| p.port)
-            .unwrap_or(443);
+        let test_mode = preset
+            .map(|p| p.mode.clone())
+            .unwrap_or_default();
         Self {
             target,
             timeout_ms: saved.timeout_ms,
             interval_secs: saved.interval_secs,
             ping_interval_ms: saved.ping_interval_ms,
             duration_secs: saved.duration_mins * 60,
-            use_tcp,
-            tcp_port,
+            test_mode,
         }
     }
 }

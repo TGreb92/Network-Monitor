@@ -26,9 +26,14 @@ fn render_sidebar_section(ui: &mut egui::Ui) {
     ui.heading("📋 Sidebar - Stats Explained");
     ui.add_space(4.0);
 
+    help_item(ui, "Pack Selector",
+        "Dropdown to choose a preset pack (e.g. DNS Basics, Gaming + DNS, or custom packs).\n\
+         Loads all presets from that pack into the preset dropdown below.\n\
+         Select \"Custom\" to keep your manually configured presets.");
+
     help_item(ui, "Target Selector",
-        "Dropdown to choose which preset target to ping.\n\
-         Presets are configured in the Config tab. Changing target takes effect on next Start.");
+        "Dropdown to choose which preset target to ping from the loaded pack.\n\
+         Changing target takes effect on next Start.");
 
     help_item(ui, "Sent / Received",
         "Total number of pings sent and successful replies received.\n\
@@ -163,15 +168,40 @@ fn render_diagnosis_section(ui: &mut egui::Ui) {
 }
 
 fn render_config_section(ui: &mut egui::Ui) {
-    ui.heading("⚙ Config Settings");
+    ui.heading("📋 Presets Tab");
     ui.add_space(4.0);
 
+    help_item(ui, "Preset Packs",
+        "Collections of presets that can be loaded, saved, and shared.\n\
+         Built-in packs (🔒) are always available: DNS Basics and Gaming + DNS.\n\
+         Custom packs (👤) are created by you and stored in network-monitor-packs.toml.\n\
+         Click a pack name to load its presets into the editor.\n\
+         Buttons: ✏ Rename | 🔄 Override | 📋 Merge | 📤 Export | 🗑 Delete");
+
+    help_item(ui, "Export / Import Packs",
+        "📤 Export saves a pack as a JSON file for sharing with others.\n\
+         📥 Import reads a JSON file and shows a preview before adding it to your custom packs.\n\
+         Invalid JSON files will show an error message.");
+
     help_item(ui, "Target Presets",
-        "Add, edit, and delete named target presets.\n\
-         Each preset has a name, host (IP or hostname), and test mode (ICMP or TCP).\n\
+        "Individual preset editor within the Presets tab.\n\
+         Each preset has a name, host (IP or hostname), test mode (ICMP or TCP), and category.\n\
          ICMP mode uses standard ping. TCP mode uses a TCP handshake to a port (default 443).\n\
-         Use TCP mode for targets that block ICMP (e.g. game servers, some CDNs).\n\
-         Presets are saved to network-monitor.toml.");
+         Use TCP mode for targets that block ICMP (e.g. game servers, some CDNs).");
+
+    ui.add_space(8.0);
+    ui.heading("🎮 Servers Tab");
+    ui.add_space(4.0);
+
+    help_item(ui, "Server Connectivity Check",
+        "On-demand parallel test of all presets in a selected pack.\n\
+         Use the Pack dropdown to pick which pack to test (independent from sidebar).\n\
+         Click Check All to test all presets simultaneously.\n\
+         Results show status (🟢/🔴/🟡), latency, and are grouped by category.");
+
+    ui.add_space(8.0);
+    ui.heading("⚙ Config Tab");
+    ui.add_space(4.0);
 
     help_item(ui, "Timeout (ms)",
         "How long to wait for a reply before marking it as lost.\n\
@@ -213,6 +243,9 @@ fn render_tips_section(ui: &mut egui::Ui) {
     ui.label("• Enable gateway monitoring to diagnose local vs ISP issues");
     ui.label("• Use TCP mode for targets that block ICMP (game servers, some CDNs)");
     ui.label("• Enable modem health check to detect modem CPU struggles");
+    ui.label("• Use preset packs to quickly switch between DNS and gaming server sets");
+    ui.label("• Export packs as JSON to share your server lists with others");
+    ui.label("• Use the Servers tab to test all presets in a pack at once");
     ui.label("• Use the Console tab to spot individual timeout events");
     ui.label("• Export to CSV/JSON to save results for later analysis");
     ui.label("• Try different targets (Cloudflare 1.1.1.1, Quad9 9.9.9.9) to isolate route-specific problems");

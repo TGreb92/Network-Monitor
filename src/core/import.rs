@@ -23,8 +23,7 @@ pub fn read_json(path: &std::path::Path) -> Result<PingState, String> {
         interval_secs: 60,
         ping_interval_ms: export.test_info.ping_interval_ms,
         duration_secs: 0,
-        use_tcp: false,
-        tcp_port: 443,
+        test_mode: Default::default(),
     };
 
     let mut state = PingState::new(config);

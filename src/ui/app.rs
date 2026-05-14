@@ -6,10 +6,13 @@ use eframe::egui;
 
 use crate::core::config;
 use crate::core::pinger;
+use crate::core::preset_packs;
 use crate::core::state::{PingConfig, SharedState, ShutdownSignal, lock_state};
 use crate::ui::tabs::config::ConfigState;
 use crate::ui::tabs::console::{self, ConsoleState};
 use crate::ui::tabs::monitor::{self, MonitorState};
+use crate::ui::tabs::presets::{self, PresetsTabState};
+use crate::ui::tabs::servers::{self, ServersState};
 use crate::ui::components::sidebar::{self, SidebarState};
 use crate::ui::components::tray::{TrayState, TrayAction};
 use crate::ui::tabs::help;
@@ -20,6 +23,8 @@ use crate::ui::tabs::debug;
 enum Tab {
     Monitor,
     Console,
+    Presets,
+    Servers,
     Config,
     Help,
     #[cfg(debug_assertions)]
@@ -34,6 +39,8 @@ pub struct NetworkMonitorApp {
     console: ConsoleState,
     config_tab: ConfigState,
     monitor: MonitorState,
+    presets_tab: PresetsTabState,
+    servers: ServersState,
     tray: TrayState,
     /// Shutdown signals for background threads
     pinger_shutdown: Option<ShutdownSignal>,
@@ -64,6 +71,9 @@ impl NetworkMonitorApp {
         sidebar.exports = crate::ui::components::export_import::ExportState::from_saved(&saved);
         sidebar.notifications = crate::ui::components::notifications::NotificationState::from_saved(&saved);
 
+        let packs_config = preset_packs::load();
+        let presets_tab = PresetsTabState::from_packs_config(&packs_config);
+
         Self {
             state,
             active_tab: Tab::Monitor,
@@ -71,6 +81,8 @@ impl NetworkMonitorApp {
             console: ConsoleState::new(),
             config_tab: ConfigState::from_saved(&saved),
             monitor: MonitorState::new(),
+            presets_tab,
+            servers: ServersState::new(),
             tray: TrayState::new(),
             pinger_shutdown: None,
             gateway_shutdown: None,
@@ -180,6 +192,8 @@ impl eframe::App for NetworkMonitorApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, Tab::Monitor, "📊 Monitor");
                 ui.selectable_value(&mut self.active_tab, Tab::Console, "🖥 Console");
+                ui.selectable_value(&mut self.active_tab, Tab::Presets, "📋 Presets");
+                ui.selectable_value(&mut self.active_tab, Tab::Servers, "🎮 Servers");
                 ui.selectable_value(&mut self.active_tab, Tab::Config, "⚙ Config");
                 ui.selectable_value(&mut self.active_tab, Tab::Help, "❓ Help");
                 #[cfg(debug_assertions)]
@@ -193,6 +207,11 @@ impl eframe::App for NetworkMonitorApp {
                     monitor::render(ui, &shared, &mut self.monitor);
                 }
                 Tab::Console => console::render(ui, &self.state, &mut self.console),
+                Tab::Presets => presets::render(ui, &mut self.presets_tab, &mut self.sidebar),
+                Tab::Servers => {
+                    let all_packs = self.presets_tab.all_packs();
+                    servers::render(ui, &all_packs, &mut self.servers, &self.sidebar);
+                }
                 Tab::Config => crate::ui::tabs::config::render(ui, &self.state, &mut self.config_tab, &mut self.sidebar),
                 Tab::Help => help::render(ui),
                 #[cfg(debug_assertions)]

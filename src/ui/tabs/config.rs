@@ -1,14 +1,12 @@
 //! # Config Tab - Settings with TOML persistence
 //!
 //! Ping parameters, gateway settings, and duration.
-//! Preset management is in `presets.rs`.
 
 use eframe::egui;
 use std::time::Instant;
 
 use crate::core::config::{self, SavedConfig, default_presets};
 use crate::core::state::{PingConfig, SharedState, lock_state};
-use crate::ui::components::presets::{self, PresetEditorState};
 use crate::ui::components::sidebar::SidebarState;
 
 /// Config tab local state
@@ -37,7 +35,6 @@ pub struct ConfigState {
     pub modem_health_interval: u32,
     pub modem_struggle_window: u32,
     pub status: Option<(String, Instant)>,
-    pub preset_editor: PresetEditorState,
 }
 
 impl ConfigState {
@@ -67,7 +64,6 @@ impl ConfigState {
             modem_health_interval: saved.modem_health_interval_secs,
             modem_struggle_window: saved.modem_struggle_window_mins,
             status: None,
-            preset_editor: PresetEditorState::new(),
         }
     }
 }
@@ -80,10 +76,6 @@ pub fn render(ui: &mut egui::Ui, state: &SharedState, cfg: &mut ConfigState, sid
             ui.heading("⚙ Configuration");
             ui.add_space(8.0);
 
-            presets::render(ui, &mut cfg.preset_editor, sidebar);
-            ui.add_space(12.0);
-            ui.separator();
-            ui.add_space(8.0);
             render_fields(ui, cfg);
             ui.add_space(12.0);
             render_buttons(ui, state, cfg, sidebar);
@@ -259,12 +251,7 @@ fn render_status(ui: &mut egui::Ui, cfg: &ConfigState) {
 fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut SidebarState) {
     let target = sidebar.selected_host();
     let preset = sidebar.presets.get(sidebar.selected_preset);
-    let use_tcp = preset
-        .map(|p| p.mode == crate::core::config::TestMode::Tcp)
-        .unwrap_or(false);
-    let tcp_port = preset
-        .map(|p| p.port)
-        .unwrap_or(443);
+    let test_mode = preset.map(|p| p.mode.clone()).unwrap_or_default();
     let mut shared = lock_state(&state);
     shared.config = PingConfig {
         target,
@@ -272,8 +259,7 @@ fn apply_and_save(state: &SharedState, cfg: &mut ConfigState, sidebar: &mut Side
         interval_secs: cfg.interval,
         ping_interval_ms: cfg.ping_freq.max(100),
         duration_secs: cfg.duration_mins * 60,
-        use_tcp,
-        tcp_port,
+        test_mode,
     };
     shared.gateway.enabled = cfg.gateway_enabled;
     shared.config_changed = true;

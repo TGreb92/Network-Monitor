@@ -29,11 +29,20 @@ Or build from source (see [Building](#building) below).
 - **Configurable detection window** — adjust the struggle detection window (2–30 minutes) to match your issue pattern
 - **6-level diagnosis** — Local network → Modem CPU struggling → Modem may be struggling → Modem web UI unreachable → ISP/route issue → All clear
 
-### 📋 Presets & Configuration
-- **Named target presets** — save frequently used targets (Google DNS, Cloudflare, etc.)
-- **Quick-switch dropdown** — change targets without retyping
-- **Add/edit/delete presets** in the Config tab
-- **TOML persistence** — all settings saved to `network-monitor.toml` next to the executable
+### 📋 Presets & Packs
+- **Preset packs** — named collections of presets (built-in: DNS Basics, Gaming + DNS)
+- **Custom packs** — create, rename, override, merge, and delete your own packs
+- **Pack export/import** — share packs as JSON files; import with preview and confirmation
+- **ICMP + TCP modes** — each preset can use ICMP ping or TCP connect (for servers that block ICMP)
+- **Category grouping** — presets have categories for organized display in the Servers tab
+- **Sidebar pack selector** — quick-switch between packs without leaving the Monitor tab
+- **TOML persistence** — presets in `network-monitor.toml`, packs in `network-monitor-packs.toml`
+
+### 🎮 Server Connectivity Testing
+- **Servers tab** — on-demand parallel connectivity check for all presets in a pack
+- **Independent pack dropdown** — test any pack without changing your monitoring target
+- **Category-grouped results** — status icons (🟢/🔴/🟡), latency, and mode per server
+- **25 built-in gaming presets** — Riot, Valve/Steam, Blizzard, Epic, Activision, EA, Xbox, PlayStation
 
 ### 🔔 Notifications
 - **Toast notifications** on loss events, gateway loss, and tiered high pings
@@ -69,6 +78,8 @@ src/
 │   ├── import.rs            — JSON import to reconstruct session
 │   ├── modem_health.rs      — HTTP health check background thread
 │   ├── pinger.rs            — Background ping thread, gateway detection
+│   ├── preset_packs.rs      — Preset pack management, TOML + JSON persistence
+│   ├── server_check.rs      — ICMP/TCP connectivity checks, TestMode enum
 │   └── models/
 │       ├── state.rs         — Shared state (PingState), shutdown signals, diagnosis
 │       ├── types.rs         — PingResult, PingConfig, IntervalReport
@@ -80,9 +91,9 @@ src/
     ├── components/
     │   ├── helpers.rs        — Formatting utilities (stat cards, color helpers)
     │   ├── notifications.rs  — Toast notification logic, cooldown, severity
-    │   ├── presets.rs        — Preset CRUD UI
+    │   ├── presets.rs        — Preset CRUD UI (generic, used by multiple tabs)
     │   ├── export_import.rs  — Export buttons, auto-export, JSON import
-    │   ├── sidebar.rs        — Controls panel, target selector, stats
+    │   ├── sidebar.rs        — Controls panel, pack/target selector, stats
     │   └── tray.rs           — System tray icon, menu, hide/show via Win32
     └── tabs/
         ├── config.rs         — Config tab: ping, gateway, modem health, notifications
@@ -90,6 +101,8 @@ src/
         ├── debug.rs          — Debug tab (debug builds only): test toasts, thread status
         ├── help.rs           — Help tab: metric explanations and usage guide
         ├── monitor.rs        — Monitor tab: windowed stats, chart, reports, diagnosis
+        ├── presets.rs        — Presets tab: pack management, preset editor, export/import
+        └── servers.rs        — Servers tab: parallel connectivity check with pack dropdown
 ```
 
 ### Design Decisions
@@ -141,7 +154,9 @@ Debug builds include a console window and a Debug tab with test toast buttons, t
 |-----|---------|
 | **📊 Monitor** | Latency chart, windowed stats, interval reports, network diagnosis |
 | **🖥 Console** | Live scrolling ping log |
-| **⚙ Config** | Ping settings, presets, gateway, modem health, notifications, export |
+| **📋 Presets** | Preset pack management, individual preset editor, JSON export/import |
+| **🎮 Servers** | On-demand parallel connectivity check with pack dropdown |
+| **⚙ Config** | Ping settings, gateway, modem health, notifications, export |
 | **❓ Help** | Explanation of all metrics and UI elements |
 | **🔧 Debug** | Thread status, test toasts, event simulation *(debug builds only)* |
 
