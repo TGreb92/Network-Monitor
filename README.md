@@ -195,4 +195,4 @@ Click **📥 Load JSON…** in the sidebar to import a previous JSON export and 
 
 ## License
 
-MIT
+Licensed under the [MIT License](LICENSE).

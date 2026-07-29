@@ -3,6 +3,8 @@ name = "network-monitor"
 version = "0.1.0"
 edition = "2021"
 description = "A lightweight desktop network monitor built with egui"
+license = "MIT"
+repository = "https://github.com/TGreb92/Network-Monitor"
 
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "persistence"] }
