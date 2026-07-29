@@ -2,6 +2,12 @@
 
 A lightweight Rust desktop application that monitors network connectivity by pinging a target host. Built with [egui](https://github.com/emilk/egui) for a native, dark-themed GUI.
 
+## Why This Exists (and a Warning)
+
+I built this to diagnose a dying modem and prove to my ISP that the drops were real. The odd feature set — modem struggle detection, gateway-vs-external loss split, ISP report export — exists for that reason.
+
+It was written almost entirely by AI with me steering. It works, but the code quality is uneven and there are no tests. Beware.
+
 ## Download
 
 Grab the latest `network-monitor.exe` from the [Releases](../../releases) page — no install required.
