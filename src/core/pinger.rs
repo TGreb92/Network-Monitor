@@ -53,18 +53,65 @@ pub fn detect_gateway() -> Option<String> {
 
     let output = cmd.output().ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_gateway(&stdout)
+}
+
+fn parse_gateway(stdout: &str) -> Option<String> {
+    let mut reading_gateway_continuation = false;
 
     for line in stdout.lines() {
-        if !line.contains("Default Gateway") {
+        if line.contains("Default Gateway") {
+            reading_gateway_continuation = true;
+            let value = line.split_once(':').map(|(_, value)| value.trim());
+            if let Some(ip) = value.and_then(valid_ipv4_gateway) {
+                return Some(ip);
+            }
             continue;
         }
-        let Some(colon_pos) = line.rfind(':') else { continue };
-        let ip = line[colon_pos + 1..].trim();
-        if !ip.is_empty() && ip.contains('.') && ip != "0.0.0.0" {
-            return Some(ip.to_string());
+
+        if reading_gateway_continuation {
+            let value = line.trim();
+            if value.is_empty() {
+                reading_gateway_continuation = false;
+                continue;
+            }
+            if let Some(ip) = valid_ipv4_gateway(value) {
+                return Some(ip);
+            }
         }
     }
     None
+}
+
+fn valid_ipv4_gateway(value: &str) -> Option<String> {
+    let address = value.parse::<std::net::Ipv4Addr>().ok()?;
+    (!address.is_unspecified()).then(|| address.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_gateway;
+
+    #[test]
+    fn parses_ipv4_gateway_continuing_after_ipv6_gateway() {
+        let output = "\
+Ethernet adapter Ethernet:
+
+   IPv4 Address. . . . . . . . . . . : 192.168.0.186
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::a2e7:aeff:febf:eb12%11
+                                       192.168.0.1
+";
+
+        assert_eq!(parse_gateway(output).as_deref(), Some("192.168.0.1"));
+    }
+
+    #[test]
+    fn parses_ipv4_gateway_on_labeled_line() {
+        let output = "   Default Gateway . . . . . . . . . : 10.0.0.1\n";
+
+        assert_eq!(parse_gateway(output).as_deref(), Some("10.0.0.1"));
+    }
 }
 
 /// Main pinger loop. Runs indefinitely, checking the `running` flag each iteration.
